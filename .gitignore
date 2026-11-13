@@ -1,0 +1,25 @@
+# Runtime state and local tooling
+node_modules/
+.DS_Store
+*.log
+
+# Workspace-private material; never part of this repository
+.mnemon/
+.agents/
+friction/
+design/
+docs/FRICTION.md
+docs/COPY_AGENTS.md
+docs/PLAN.md
+docs/ui/
+
+# Extension signing key: kept outside the repository, generated on demand by
+# scripts/pack-extension.mjs when missing (a new key means a new extension id).
+dist/extension-key.pem
+*.pem
+*.key
+.env*
+pairing.txt
+
+# Export bookkeeping
+.browser-bridge-export

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture Deep Frame</title>
+<style>body{font:13px/1.4 system-ui,sans-serif;margin:6px}button{padding:4px 8px}</style>
+</head>
+<body>
+<p id="deep">DEEP-FRAME</p>
+<button id="deep-btn" type="button">deep button</button>
+<p>deep clicked: <code id="deep-out">idle</code></p>
+<script>
+  document.getElementById('deep-btn').addEventListener('click', () => {
+    document.getElementById('deep-out').textContent = 'DEEP-CLICKED'
+  })
+</script>
+</body>
+</html>

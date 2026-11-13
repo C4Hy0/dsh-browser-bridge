@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Tool Arcade</title>
+<style>
+  :root { color-scheme: light; --ink: #22201c; --muted: #6b655c; --line: #d9d2c6; }
+  body { margin: 0; padding: 28px; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--ink); background: #faf7f1; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 20px; color: var(--muted); }
+  section { border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 14px; background: #fff; max-width: 560px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line); background: #f2ede3; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type="text"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; width: 160px; }
+  code { background: #f2ede3; padding: 1px 5px; border-radius: 4px; }
+  .status { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .piece { display: inline-block; min-width: 18px; color: #6f1d1b; font-weight: 700; }
+  #hold { user-select: none; touch-action: none; }
+  #grid { display: grid; grid-template-columns: repeat(4, 68px); gap: 6px; margin-top: 10px; width: max-content; }
+  .cell { width: 68px; height: 68px; border: 1px solid var(--line); border-radius: 8px; background: #f7f2e8; cursor: pointer; }
+  .cell.wrong { background: #f6d6d3; }
+  #arc { font-size: 14px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<h1>Tool Arcade</h1>
+<p class="lead">Four interactions. Solve each card to reveal one letter, then enter the word.</p>
+
+<section>
+  <h2>1. Hold the button</h2>
+  <button id="hold" type="button">press and hold 2 seconds</button>
+  <p class="status">held: <code id="hold-out">0 ms</code> · piece: <span class="piece" id="p1">·</span></p>
+</section>
+
+<section>
+  <h2>2. Slide to 73</h2>
+  <input id="slide" type="range" min="0" max="100" value="12" />
+  <p class="status">value: <code id="slide-out">12</code> · piece: <span class="piece" id="p2">·</span></p>
+</section>
+
+<section>
+  <h2>3. Find the odd cell</h2>
+  <div id="grid"></div>
+  <p class="status">piece: <span class="piece" id="p3">·</span></p>
+</section>
+
+<section>
+  <h2>4. Type the code</h2>
+  <canvas id="code-canvas" width="320" height="80"></canvas>
+  <p><input id="code" type="text" placeholder="4 characters" autocomplete="off" />
+     <button id="code-check" type="button">check</button></p>
+  <p class="status">piece: <span class="piece" id="p4">·</span></p>
+</section>
+
+<section>
+  <h2>Final</h2>
+  <p><input id="final" type="text" placeholder="four letters" autocomplete="off" />
+     <button id="final-check" type="button">submit</button></p>
+  <p class="status" id="arc">arcade: waiting for the four pieces</p>
+</section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id)
+  const solved = { 1: false, 2: false, 3: false, 4: false }
+  const piece = (n) => {
+    if (solved[n]) return true
+    solved[n] = true
+    const letters = { 1: 'K', 2: 'R', 3: 'A', 4: 'T' }
+    $('p' + n).textContent = letters[n]
+    refresh()
+    return true
+  }
+
+  // 1 — pointer must stay down for two full seconds.
+  const hold = $('hold')
+  let downAt = 0
+  let holdTimer = 0
+  hold.addEventListener('pointerdown', () => {
+    if (solved[1]) return
+    downAt = performance.now()
+    holdTimer = setInterval(() => { $('hold-out').textContent = Math.round(performance.now() - downAt) + ' ms' }, 80)
+  })
+  const release = () => {
+    clearInterval(holdTimer)
+    if (!downAt) return
+    const held = performance.now() - downAt
+    downAt = 0
+    $('hold-out').textContent = Math.round(held) + ' ms'
+    if (held >= 2000) piece(1)
+  }
+  hold.addEventListener('pointerup', release)
+  hold.addEventListener('pointerleave', release)
+  hold.addEventListener('pointercancel', release)
+
+  // 2 — the slider must sit near 73 long enough to notice.
+  const slide = $('slide')
+  let slideTimer = 0
+  const slideCheck = () => {
+    const value = Number(slide.value)
+    $('slide-out').textContent = String(value)
+    clearTimeout(slideTimer)
+    if (Math.abs(value - 73) <= 2 && !solved[2]) slideTimer = setTimeout(() => piece(2), 300)
+  }
+  slide.addEventListener('input', slideCheck)
+  slideCheck()
+
+  // 3 — exactly one cell carries a tiny dot; everything else is blank.
+  const grid = $('grid')
+  const odd = Math.floor(Math.random() * 12)
+  for (let i = 0; i < 12; i += 1) {
+    const cell = document.createElement('div')
+    cell.className = 'cell'
+    cell.dataset.index = String(i)
+    if (i === odd) {
+      const dot = document.createElement('div')
+      dot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:#b3261e;margin:31px auto 0'
+      cell.appendChild(dot)
+    }
+    cell.addEventListener('click', () => {
+      if (solved[3]) return
+      if (i === odd) piece(3)
+      else {
+        cell.classList.add('wrong')
+        setTimeout(() => cell.classList.remove('wrong'), 350)
+      }
+    })
+    grid.appendChild(cell)
+  }
+
+  // 4 — the code exists only as pixels.
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const code = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+  const canvas = $('code-canvas')
+  const ctx = canvas.getContext('2d')
+  const paint = () => {
+    ctx.fillStyle = '#f7f2e8'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.strokeStyle = '#e2d9c8'
+    for (let y = 8; y < canvas.height; y += 9) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke()
+    }
+    ctx.fillStyle = '#22201c'
+    ctx.font = '42px ui-monospace, monospace'
+    ctx.textBaseline = 'middle'
+    for (let i = 0; i < 4; i += 1) {
+      ctx.save()
+      const x = 30 + i * 72
+      const y = 40 + Math.sin(i * 1.7) * 3
+      ctx.translate(x, y)
+      ctx.rotate((Math.random() - 0.5) * 0.05)
+      ctx.fillText(code[i], 0, 0)
+      ctx.restore()
+    }
+  }
+  paint()
+  $('code-check').addEventListener('click', () => {
+    if (solved[4]) return
+    if ($('code').value.trim().toUpperCase() === code) piece(4)
+    else $('code').value = ''
+  })
+
+  const refresh = () => {
+    const ok = solved[1] && solved[2] && solved[3] && solved[4]
+    $('arc').textContent = ok ? 'arcade: four pieces — submit the word' : 'arcade: waiting for the four pieces'
+  }
+
+  $('final-check').addEventListener('click', () => {
+    if (!(solved[1] && solved[2] && solved[3] && solved[4])) {
+      $('arc').textContent = 'arcade: solve every card first'
+      return
+    }
+    const word = $('final').value.trim().toUpperCase()
+    if (word === 'KRAT') $('arc').textContent = 'arcade: SOLVED — every interaction worked'
+    else $('arc').textContent = 'arcade: wrong word'
+  })
+})()
+</script>
+</body>
+</html>

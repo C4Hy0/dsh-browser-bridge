@@ -1,0 +1,23 @@
+# dsh-browser-bridge — one row, host only.
+#
+# The row owns a loopback HTTP endpoint and the thirteen `bsb_*` tools. There is
+# no client row on purpose: the whole user-facing surface is the extension popup
+# and the pairing link written to <dsh home>/browser-bridge/pairing.txt.
+#
+# `port` and `bind` are optional. A wildcard bind serves browsers on other
+# machines; `advertise` is the address those browsers should dial (auto-detected
+# from the first private IPv4 when omitted).
+#
+# `allowRemotePairing` decides whether /discover hands the token to a
+# non-loopback peer. true is convenient on a trusted home LAN; false means the
+# browser must be given the link once, after which it is remembered.
+- insert:
+    - id: browser-bridge
+      name: 'browser-bridge'
+      config:
+        port: 8791
+        bind: '0.0.0.0'
+        # advertise: '192.168.1.20'
+        allowRemotePairing: true
+        # TEMPORARY (dev): page may ask the extension to reload itself.
+        devReload: true

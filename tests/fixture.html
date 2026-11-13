@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Bridge Fixture</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; color: #111; }
+  h1 { font-size: 18px; }
+  section { margin: 18px 0; padding: 12px 14px; border: 1px solid #d0d0d0; border-radius: 8px; max-width: 640px; }
+  code, output { background: #f2f2f2; padding: 1px 5px; border-radius: 4px; }
+  .hoverbox { width: 160px; height: 48px; background: #e8eefc; border: 1px solid #7a9cf0; display: grid; place-items: center; cursor: default; }
+  #hover-menu { display: none; margin-top: 6px; color: #0a7d32; font-weight: 600; }
+  .hoverbox:hover + #hover-menu { display: block; }
+  #pad { width: 220px; height: 90px; background: #fff4e0; border: 1px dashed #c98a20; display: grid; place-items: center; user-select: none; }
+  #scroll-zone { height: 120px; overflow: auto; border: 1px solid #ccc; }
+  #scroll-zone div { height: 600px; background: linear-gradient(#fff, #cfe8ff); position: relative; }
+  #scroll-zone span { position: absolute; bottom: 4px; left: 8px; font-weight: 600; color: #0a4d8c; }
+  [data-done] { color: #0a7d32; font-weight: 600; }
+  /* 1200ms: a click already carries a 400ms settle delay in the worker, so the
+     old 600ms left under 200ms of motion for `waitFor stable` to observe. */
+  #mover { width: 80px; height: 24px; background: #dcecff; border: 1px solid #6f9bd6; transition: transform 1200ms linear; }
+</style>
+</head>
+<body>
+<h1>Bridge Fixture</h1>
+<p>Deterministic widgets for exercising the browser tools. No external requests.</p>
+
+<section>
+  <div class="hoverbox" id="hover-box">hover me</div>
+  <div id="hover-menu">HOVER-MENU-VISIBLE</div>
+  <p>menu display: <code id="hover-state">none</code></p>
+</section>
+
+<section>
+  <label for="pick">pick</label>
+  <select id="pick">
+    <option value="alpha">alpha</option>
+    <option value="beta">beta</option>
+    <option value="gamma">gamma</option>
+  </select>
+  <p>selected: <code id="pick-out">alpha</code></p>
+</section>
+
+<section>
+  <label for="slide">slider</label>
+  <input id="slide" type="range" min="0" max="100" value="10" />
+  <output id="slide-out">10</output>
+</section>
+
+<section>
+  <label for="keys">keys</label>
+  <input id="keys" type="text" />
+  <p>last key: <code id="key-log">(none)</code></p>
+</section>
+
+<section>
+  <label for="type-in">type</label>
+  <input id="type-in" type="text" />
+  <p>mirror: <code id="type-out">(empty)</code></p>
+</section>
+
+<section>
+  <label for="file-in">file</label>
+  <input id="file-in" type="file" />
+  <p>attached: <code id="file-out">none</code></p>
+</section>
+
+<section>
+  <button id="later" type="button">wait for it</button>
+  <div id="later-slot"></div>
+</section>
+
+<section>
+  <button id="gate" type="button">enable after 700ms</button>
+  <button id="late-btn" type="button" disabled>late button</button>
+  <button class="bulk" id="bulk-1" type="button">bulk 1</button>
+  <button class="bulk" id="bulk-2" type="button">bulk 2</button>
+  <button class="bulk" id="bulk-3" type="button">bulk 3</button>
+  <p>bulk clicks: <code id="bulk-out">0</code> · late button hits: <code id="late-hits">0</code></p>
+  <button id="move" type="button">move box</button>
+  <button id="reset-mover" type="button">reset mover</button>
+  <button id="flash" type="button">flash</button>
+  <div id="mover">mover</div>
+</section>
+
+<section>
+  <div id="scroll-zone"><div><span>END-OF-SCROLL</span></div></div>
+</section>
+
+<section>
+  <iframe id="sub" title="sub" width="420" height="170" src="/browser-bridge/dev/fixture-inner"></iframe>
+</section>
+
+<section>
+  <div id="pad">drag here</div>
+  <p>pad: <code id="pad-out">(idle)</code></p>
+</section>
+
+<section>
+  <canvas id="cv" width="240" height="90"></canvas>
+</section>
+
+<section>
+  <img id="inline-png" width="4" height="4" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" />
+  <p>inline image: <code id="inline-state">painted</code></p>
+</section>
+
+<section>
+  <button id="fetch-api" type="button">fetch api</button>
+  <button id="fetch-later" type="button">fetch after 900ms</button>
+  <div id="drop-zone">drop here</div>
+  <div id="shadow-host"></div>
+  <code id="drop-out">(empty)</code>
+  <pre id="fetch-out">(not fetched)</pre>
+</section>
+
+<section>
+  <button id="ask" type="button">open dialog</button>
+  <p>dialog: <code id="dialog-log">(none)</code></p>
+</section>
+
+<p>ready</p>
+
+<script>
+  const hoverState = document.getElementById('hover-state')
+  const hoverBox = document.getElementById('hover-box')
+  hoverBox.addEventListener('mouseenter', () => { hoverState.textContent = 'entered' })
+  hoverBox.addEventListener('mouseleave', () => { hoverState.textContent = 'left' })
+
+  const pick = document.getElementById('pick')
+  pick.addEventListener('change', () => {
+    document.getElementById('pick-out').textContent = pick.value
+  })
+
+  const slide = document.getElementById('slide')
+  slide.addEventListener('input', () => {
+    document.getElementById('slide-out').textContent = slide.value
+  })
+
+  document.getElementById('keys').addEventListener('keydown', (event) => {
+    const mods = [event.ctrlKey && 'ctrl', event.shiftKey && 'shift', event.altKey && 'alt', event.metaKey && 'meta'].filter(Boolean)
+    document.getElementById('key-log').textContent = [event.key, ...mods].join('+') || '(none)'
+  })
+
+  const typeIn = document.getElementById('type-in')
+  typeIn.addEventListener('input', () => {
+    document.getElementById('type-out').textContent = typeIn.value || '(empty)'
+  })
+
+  // waits: a control that enables later, and a box that settles after motion.
+  document.getElementById('gate').addEventListener('click', () => { setTimeout(() => { document.getElementById('late-btn').disabled = false }, 700) })
+  document.getElementById('move').addEventListener('click', () => { document.getElementById('mover').style.transform = 'translateX(120px)' })
+  // Test-only controls: the bridge may only change this page through its own
+  // controls, so resets and the recording flash live here, in page JS.
+  document.getElementById('reset-mover').addEventListener('click', () => {
+    const el = document.getElementById('mover')
+    el.style.transition = 'none'
+    el.style.transform = ''
+    el.style.backgroundColor = ''
+    void el.offsetWidth
+    el.style.transition = ''
+    document.body.style.backgroundColor = ''
+  })
+  let flashTimer = null
+  document.getElementById('flash').addEventListener('click', () => {
+    const shades = ['#101010', '#202020', '#303030', '#404040', '#505050', '#606060']
+    let step = 0
+    if (flashTimer) clearInterval(flashTimer)
+    flashTimer = setInterval(() => {
+      document.body.style.backgroundColor = shades[step % shades.length]
+      document.getElementById('mover').style.backgroundColor = shades[(step + 2) % shades.length]
+      step += 1
+      if (step >= 24) { clearInterval(flashTimer); flashTimer = null; document.body.style.backgroundColor = '' }
+    }, 90)
+  })
+  let bulkClicks = 0
+  for (const el of document.querySelectorAll('.bulk')) {
+    el.addEventListener('click', () => { bulkClicks += 1; document.getElementById('bulk-out').textContent = String(bulkClicks) })
+  }
+  let lateHits = 0
+  document.getElementById('late-btn').addEventListener('click', () => { lateHits += 1; document.getElementById('late-hits').textContent = String(lateHits) })
+
+  document.getElementById('later').addEventListener('click', () => {
+    setTimeout(() => {
+      const el = document.createElement('p')
+      el.id = 'late-done'
+      el.setAttribute('data-done', '1')
+      el.textContent = 'late-done'
+      document.getElementById('later-slot').appendChild(el)
+    }, 600)
+  })
+
+  const pad = document.getElementById('pad')
+  let pressed = false
+  const padOut = document.getElementById('pad-out')
+  pad.addEventListener('mousedown', () => { pressed = true; padOut.textContent = 'down' })
+  pad.addEventListener('mousemove', (event) => {
+    if (pressed) padOut.textContent = `x=${Math.round(event.offsetX)} y=${Math.round(event.offsetY)}`
+  })
+  pad.addEventListener('mouseup', () => { pressed = false })
+
+  const ctx = document.getElementById('cv').getContext('2d')
+  ctx.fillStyle = '#0b5'
+  ctx.fillRect(0, 0, 240, 90)
+  ctx.fillStyle = '#fff'
+  ctx.font = 'bold 22px system-ui, sans-serif'
+  ctx.fillText('CANVAS-OK', 26, 55)
+
+  document.getElementById('fetch-later').addEventListener('click', () => {
+    setTimeout(() => {
+      fetch('/browser-bridge/extension-meta.json?later=1', { cache: 'no-store', headers: { 'x-fixture-token': 'alpha-42' } }).then((r) => r.text()).catch(() => undefined)
+    }, 900)
+  })
+  document.getElementById('fetch-api').addEventListener('click', async () => {
+    const out = document.getElementById('fetch-out')
+    try {
+      const res = await fetch('/browser-bridge/extension-meta.json', { cache: 'no-store', headers: { 'x-fixture-api': 'beta-7' } })
+      const text = await res.text()
+      out.textContent = text.slice(0, 120)
+    } catch (error) {
+      out.textContent = 'fetch failed: ' + error
+    }
+  })
+
+  document.getElementById('ask').addEventListener('click', () => {
+    const answer = window.confirm('fixture-confirm')
+    document.getElementById('dialog-log').textContent = answer ? 'accepted' : 'cancelled'
+  })
+
+  // Report attached files so an upload assertion never needs eval.
+  document.getElementById('file-in').addEventListener('change', (event) => {
+    const names = Array.from(event.target.files || []).map((f) => f.name)
+    document.getElementById('file-out').textContent = names.length ? names.join(',') : 'none'
+  })
+
+  // HTML5 drag-and-drop zone: only real DnD events populate files/text.
+  const dropZone = document.getElementById('drop-zone')
+  dropZone.addEventListener('dragover', (event) => event.preventDefault())
+  dropZone.addEventListener('drop', (event) => {
+    event.preventDefault()
+    const files = Array.from(event.dataTransfer?.files || []).map((file) => file.name)
+    const text = event.dataTransfer?.getData('text/plain') || ''
+    document.getElementById('drop-out').textContent = files.length ? 'files:' + files.join(',') : 'text:' + text
+  })
+
+  // Open shadow root: modern components hide their controls behind one.
+  const shadow = document.getElementById('shadow-host').attachShadow({ mode: 'open' })
+  shadow.innerHTML = '<button id="shadow-btn" type="button">shadow button</button>' +
+    '<p>shadow out: <code id="shadow-out">idle</code></p>' +
+    '<label for="shadow-in">shadow input</label><input id="shadow-in" type="text">' +
+    '<p>shadow mirror: <code id="shadow-mirror">(empty)</code></p>'
+  shadow.getElementById('shadow-btn').addEventListener('click', () => { shadow.getElementById('shadow-out').textContent = 'SHADOW-CLICKED' })
+  shadow.getElementById('shadow-in').addEventListener('input', (event) => { shadow.getElementById('shadow-mirror').textContent = event.target.value })
+
+  // A page global the isolated world must not see.
+  window.__bridgeGlobal = 'main-only-42'
+
+  // Publish the live :hover state so assertions never need eval.
+  setInterval(() => {
+    hoverState.textContent = getComputedStyle(document.getElementById('hover-menu')).display === 'block' ? 'HOVERED' : 'none'
+  }, 100)
+</script>
+<section>
+  <p>tall element — taller than the viewport on purpose, so a selector capture must not truncate it</p>
+  <div id="tall" style="width:120px;height:1200px;background:linear-gradient(#cfe8ff,#0a4d8c);"></div>
+</section>
+
+</body>
+</html>

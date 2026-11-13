@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Browser Bridge</title>
+    <style>
+      /*
+       * Full-bleed panel, not a card.
+       *
+       * A Chrome popup is its own window sitting against the browser's chrome, so
+       * a neutral surface that matches the browser frame disappears into it. The
+       * fields here are deliberately offset from the browser's own light/dark: a
+       * graphite in dark scheme (clearly lifted off near-black chrome) and a cool
+       * grey in light scheme (clearly darker than white), so the panel always
+       * reads as a separate object rather than camouflage.
+       *
+       * No border, no radius, no shadow. Separation comes from colour fields and
+       * one hairline. Colour is the DSW blue / neutral-bluish ramp only.
+       */
+      /*
+       * Two faces, two jobs, and only two files.
+       *
+       *   sans     Outfit          interface prose: the title, the status word,
+       *                            Pair, and the row labels. Geometric to the
+       *                            point of being toy-like, which is the point —
+       *                            it reads as friendly next to the mono.
+       *   mono     Azeret Mono     the serial and host:port. Characterful enough to
+       *                            be memorable, and its 0/O and 1/l/I are
+       *                            unmistakable, which is what an id needs.
+       *
+       * Both are latin subsets: the popup renders Latin text and nothing else, so
+       * carrying Cyrillic or Greek would be bytes that never get drawn.
+       * `font-display: swap` means the platform UI face flashes first for a frame
+       * or two rather than the text staying invisible.
+       */
+      @font-face {
+        font-family: 'Outfit';
+        src: url('fonts/outfit.woff2') format('woff2');
+        font-weight: 400 700;
+        font-style: normal;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'Azeret Mono';
+        src: url('fonts/azeret-mono.woff2') format('woff2');
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        color-scheme: light dark;
+
+        --sans: 'Outfit', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+        --mono: 'Azeret Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+        --field: light-dark(#e2e7ef, #262628);
+        --field-sunk: light-dark(#d6dce6, #1e1e20);
+        --hairline: light-dark(rgba(15, 17, 21, 0.12), rgba(255, 255, 255, 0.09));
+        --text: light-dark(#0f1115, #ffffff);
+        --text-2: light-dark(#4f5459, #d5d9dd);
+        --text-3: light-dark(#5c6167, #b4b9bf);
+        --accent: light-dark(#1e40af, #93c5fd);
+        --band: light-dark(#172554, #172554);
+        --band-ink: light-dark(#dbeafe, #93c5fd);
+        --lamp: light-dark(#2563eb, #60a5fa);
+        --lamp-halo: light-dark(rgba(37, 99, 235, 0.2), rgba(96, 165, 250, 0.26));
+        --ok: light-dark(#16a34a, #4ade80);
+        --ok-halo: light-dark(rgba(22, 163, 74, 0.18), rgba(74, 222, 128, 0.22));
+        --danger: light-dark(#dc2626, #ef4444);
+        --warn: light-dark(#d97706, #fbbf24);
+        --warn-halo: light-dark(rgba(217, 119, 6, 0.18), rgba(251, 191, 36, 0.22));
+      }
+      :root[data-theme='light'] {
+        color-scheme: light;
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+      }
+      body {
+        width: 300px;
+        background: var(--field);
+        color: var(--text);
+        font: 400 12px/1.55 var(--sans);
+        letter-spacing: 0.01em;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Top line: what this is, and whether it is attached. */
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+        background: var(--field-sunk);
+      }
+      .mark {
+        width: 18px;
+        height: 18px;
+        flex: none;
+        display: block;
+      }
+      .org {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-3);
+        letter-spacing: 0.005em;
+        word-spacing: 0.03em;
+      }
+      .status {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--text-2);
+        white-space: nowrap;
+      }
+      /*
+       * The status light is the only thing in the popup that changes on its own,
+       * so it carries three states instead of two and says each one with motion:
+       * connected breathes and pings, reconnecting pulses slowly in amber,
+       * anything else sits still and grey. Stillness is the signal for "nothing
+       * is happening", which is why only the live states animate.
+       */
+      .lamp {
+        position: relative;
+        width: 6px;
+        height: 6px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--text-3);
+        transition: background-color 200ms ease, box-shadow 200ms ease;
+      }
+      .lamp.live {
+        background: var(--ok);
+        box-shadow: 0 0 0 2px var(--ok-halo);
+      }
+      .lamp.warn {
+        background: var(--warn);
+        box-shadow: 0 0 0 2px var(--warn-halo);
+      }
+
+      .body {
+        /* Equal on all four sides. The old 18/16/16 read as uneven because the
+           band below the last row gives the eye a hard edge to measure against. */
+        padding: 16px;
+      }
+      /*
+       * Everything below the header is one block: the pairing row, then the
+       * facts. There is no divider because there is no subject line above it any
+       * more — the header already separates itself, and the body's padding does
+       * the spacing. Kept as a wrapper so the rows and the field stay together.
+       */
+      .identity {
+        padding-top: 0;
+      }
+      .data {
+        margin: 0;
+        display: grid;
+        /* minmax(0, 1fr) instead of the default auto column: an auto track sizes
+           to its longest value, so one long host would widen the whole popup
+           instead of letting the value ellipsise. */
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+      }
+      .row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        min-width: 0;
+      }
+      /*
+       * The whole data block is mono, label included, so a row reads as one
+       * recorded unit instead of a sans label pointing at a mono value. This is
+       * the only place mono appears: the header, the status and the browser name
+       * stay in their own faces.
+       */
+      .row dt {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-3);
+        /* A mono advance already spaces itself; the tracking the sans labels
+           needed here would open the mono out until the glyphs drifted apart. */
+        letter-spacing: 0;
+        word-spacing: 0;
+        flex: none;
+      }
+      .row dd {
+        margin: 0;
+        font: 400 12px/1.25 var(--mono);
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        /* A flex item defaults to min-width:auto, which refuses to shrink below
+           its content — so without this the ellipsis never fires and a long
+           host pushes the row past the popup edge instead of truncating. */
+        min-width: 0;
+        text-align: right;
+      }
+      .row dd.serial {
+        color: var(--accent);
+        letter-spacing: 0.01em;
+      }
+
+      /*
+       * Pairing, as one row. The plugin page's Connect button cannot work when
+       * dsh runs as a desktop (Electron) app — that window has no
+       * chrome.runtime — so the popup has to accept the link itself. A sweep was
+       * removed on purpose: pasting the link the plugin already shows is exact,
+       * and it covers ports the sweep never visits.
+       */
+      .pair-row {
+        display: flex;
+        gap: 8px;
+        /* A hair wider than the text column. The 8px corner radius pulls the
+           box's visible edge inward by a pixel, so at the same nominal width the
+           bordered row reads narrower than the mono rows beneath it. One pixel
+           of overhang on each side is enough to make them look flush. */
+        margin: 0 0 12px;
+      }
+      .pair-row input {
+        flex: 1;
+        min-width: 0;
+        font: 400 12px/1 var(--mono);
+        padding: 8px 10px;
+        box-sizing: border-box;
+        min-height: 32px;
+        border-radius: 8px;
+        border: 1px solid var(--hairline);
+        background: var(--field-sunk);
+        color: var(--text);
+      }
+      .pair-row input::placeholder {
+        color: var(--text-3);
+      }
+      .pair-row button {
+        flex: none;
+        font: 500 12px/1 var(--sans);
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--hairline);
+        background: var(--field);
+        color: var(--text);
+        cursor: pointer;
+        box-sizing: border-box;
+        min-height: 32px;
+      }
+      .pair-row button {
+        transition: background-color 140ms ease, transform 90ms ease, box-shadow 140ms ease;
+      }
+      .pair-row button:hover:not(:disabled) {
+        background: var(--field-sunk);
+      }
+      /* The press is the smallest possible confirmation that the click landed. */
+      .pair-row button:active:not(:disabled) {
+        transform: scale(0.97);
+      }
+      .pair-row input:focus-visible,
+      .pair-row button:focus-visible {
+        outline: 2px solid var(--lamp);
+        outline-offset: 1px;
+      }
+      /* Success flashes the same place failure shakes, so the two read as one
+         language: the button itself reports the outcome. */
+      .pair-row button.is-ok {
+        background: var(--ok);
+        border-color: transparent;
+        color: #06210f;
+      }
+      .pair-row button:disabled {
+        cursor: default;
+        color: var(--text-3);
+      }
+      /*
+       * Error is felt, not read: the button turns red and shakes once, then
+       * stays red until the field changes. A sentence under the field made the
+       * reader parse before reacting; this makes the failed action itself look
+       * failed, which is the same information with no reading.
+       */
+      .pair-row button.is-error {
+        background: var(--danger);
+        border-color: transparent;
+        color: #ffffff;
+        animation: shake 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+      }
+      .pair-row button.is-error:hover:not(:disabled) {
+        background: var(--danger);
+      }
+      .pair-row button.is-ok:hover:not(:disabled) {
+        background: var(--ok);
+      }
+      /* Edge-to-edge stripe: the browser id, encoded. */
+      .band {
+        height: 30px;
+        padding: 0 16px;
+        background: var(--band);
+        display: flex;
+        align-items: center;
+      }
+      .bars {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .bars i {
+        display: block;
+        flex: none;
+        border-radius: 1px;
+        background: var(--band-ink);
+      }
+      /*
+       * An unpaired popup has no serial, so it gets no stripe. Encoding zeros
+       * drew a pattern that looked like data and meant nothing; one quiet rule
+       * says "nothing yet" without inventing a barcode.
+       */
+      .bars.is-empty {
+        justify-content: center;
+      }
+      .bars.is-empty::after {
+        content: '';
+        width: 96px;
+        height: 1px;
+        background: var(--band-ink);
+        opacity: 0.4;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @keyframes read {
+        from {
+          opacity: 0;
+          transform: scaleY(0.2);
+        }
+        to {
+          opacity: 1;
+          transform: scaleY(1);
+        }
+      }
+      @keyframes pop {
+        0% {
+          transform: scale(0.7);
+        }
+        55% {
+          transform: scale(1.25);
+        }
+        100% {
+          transform: scale(1);
+        }
+      }
+      @keyframes breathe-warn {
+        0%, 100% {
+          box-shadow: 0 0 0 2px var(--warn-halo);
+          opacity: 0.85;
+        }
+        50% {
+          box-shadow: 0 0 0 4px var(--warn-halo);
+          opacity: 1;
+        }
+      }
+      @keyframes ping {
+        0% {
+          opacity: 0.55;
+          transform: scale(0.8);
+        }
+        70%, 100% {
+          opacity: 0;
+          transform: scale(2.4);
+        }
+      }
+      /* A wrong pairing is felt before it is read. */
+      @keyframes shake {
+        10%, 90% { transform: translateX(-1px); }
+        20%, 80% { transform: translateX(2px); }
+        30%, 50%, 70% { transform: translateX(-3px); }
+        40%, 60% { transform: translateX(3px); }
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .bar {
+          animation: rise 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+        }
+        .data {
+          animation: rise 260ms cubic-bezier(0.22, 0.61, 0.36, 1) 100ms both;
+        }
+        .bars i {
+          animation: read 240ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+          animation-delay: calc(130ms + var(--i) * 9ms);
+        }
+        /*
+         * Motion is an event, not a decoration: the light rests still, and plays
+         * two rings when the popup opens or a pairing succeeds. A permanent
+         * animation in a 300 px popup is noise you cannot look away from.
+         */
+        .lamp.live::after {
+          content: '';
+          position: absolute;
+          inset: -2px;
+          border-radius: 50%;
+          border: 1px solid var(--ok);
+          opacity: 0;
+        }
+        .lamp.pulse.live::after {
+          animation: ping 900ms cubic-bezier(0.22, 0.61, 0.36, 1) 2;
+        }
+        .lamp.pulse {
+          animation: pop 220ms ease-out;
+        }
+        .lamp.warn.pulse {
+          animation: breathe-warn 1.7s ease-in-out 2;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="bar">
+      <img class="mark" src="icons/icon48.png" alt="" width="18" height="18" />
+      <span class="org">Browser Bridge</span>
+      <span class="status" role="status" aria-live="polite">
+        <span class="lamp" id="lamp"></span>
+        <span id="state">Checking</span>
+      </span>
+    </header>
+
+    <div class="body">
+      <div class="identity">
+        <div class="pair-row">
+          <input id="url" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="127.0.0.1:8791/p/…" aria-label="Pairing link" />
+          <button id="pair" type="button">Pair</button>
+        </div>
+        <dl class="data">
+          <div class="row">
+            <dt>Browser ID</dt>
+            <dd class="serial" id="ident">—</dd>
+          </div>
+          <div class="row">
+            <dt>Issued by</dt>
+            <dd id="issuer">—</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="band" aria-hidden="true"><div class="bars" id="bars"></div></div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

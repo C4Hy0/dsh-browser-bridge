@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36" role="img" aria-label="Browser Bridge">
+  <path
+    d="M 10.8 27
+       C 3.6 21.6, 3.6 7.2, 18 7.2
+       C 25.2 7.2, 27 14.4, 19.8 18
+       C 30.6 19.8, 32.4 30.6, 19.8 27"
+    fill="none"
+    stroke="#3964fe"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

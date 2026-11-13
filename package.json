@@ -1,0 +1,44 @@
+{
+  "name": "browser-bridge",
+  "version": "1.1.269",
+  "private": true,
+  "type": "module",
+  "description": "Drive the Chrome you are logged into through a paired extension: thirteen tools, one pairing setting, no UI.",
+  "exports": {
+    ".": "./index.js",
+    "./bridge": "./bridge.js",
+    "./tools": "./tools.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./client": "./client.js"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "README.md",
+    "index.js",
+    "http-adapter.js",
+    "tests/fixture.html",
+    "tests/fixture-inner.html",
+    "tests/fixture-deep.html",
+    "tests/arcade.html",
+    "client.js",
+    "bridge.js",
+    "tools.js",
+    "skill/**",
+    "dist/browser-bridge-extension.zip",
+    "dist/browser-bridge-extension.crx",
+    "dist/updates.xml",
+    "dist/extension-meta.json",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

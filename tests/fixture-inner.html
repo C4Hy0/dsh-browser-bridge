@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture Frame</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 8px; }
+  button { padding: 6px 10px; }
+  #inner-hover { display: inline-block; padding: 6px 10px; border: 1px dashed #888; }
+</style>
+</head>
+<body>
+<p id="inner">INNER-FRAME</p>
+<button id="inner-btn" type="button" onclick="document.getElementById('inner-out').textContent='INNER-CLICKED'">inner button</button>
+<p>clicked: <code id="inner-out">idle</code></p>
+<label for="inner-in">inner type</label>
+<input id="inner-in" type="text">
+<p>frame mirror: <code id="inner-mirror">(empty)</code></p>
+<span id="inner-hover">inner hover target</span>
+<p>hovered: <code id="inner-hover-out">idle</code></p>
+<label for="inner-pick">inner pick</label>
+<select id="inner-pick">
+  <option value="ix">ix</option>
+  <option value="iy">iy</option>
+  <option value="iz">iz</option>
+</select>
+<p>picked: <code id="inner-pick-out">(none)</code></p>
+<input id="inner-range" type="range" min="0" max="100" value="10">
+<p>range: <code id="inner-range-out">10</code></p>
+<div id="inner-pad" style="width:160px;height:44px;border:1px dashed #888">inner pad</div>
+<p>pad: <code id="inner-pad-out">idle</code></p>
+<input id="inner-file" type="file">
+<p>frame file: <code id="inner-file-out">(none)</code></p>
+<script>
+  document.getElementById('inner-in').addEventListener('input', (event) => {
+    document.getElementById('inner-mirror').textContent = event.target.value
+  })
+  document.getElementById('inner-hover').addEventListener('mouseenter', () => {
+    document.getElementById('inner-hover-out').textContent = 'INNER-HOVERED'
+  })
+  document.getElementById('inner-pick').addEventListener('change', (event) => {
+    document.getElementById('inner-pick-out').textContent = event.target.value
+  })
+  document.getElementById('inner-range').addEventListener('input', (event) => {
+    document.getElementById('inner-range-out').textContent = event.target.value
+  })
+  const ipad = document.getElementById('inner-pad')
+  let idragging = false
+  ipad.addEventListener('mousedown', () => { idragging = true; document.getElementById('inner-pad-out').textContent = 'down' })
+  ipad.addEventListener('mousemove', (event) => {
+    if (!idragging) return
+    const r = ipad.getBoundingClientRect()
+    document.getElementById('inner-pad-out').textContent = Math.round(event.clientX - r.left) + ',' + Math.round(event.clientY - r.top)
+  })
+  window.addEventListener('mouseup', () => { idragging = false })
+  document.getElementById('inner-file').addEventListener('change', (event) => {
+    document.getElementById('inner-file-out').textContent = (event.target.files[0] && event.target.files[0].name) || '(none)'
+  })
+  const drop = document.getElementById('inner-drop')
+  drop.addEventListener('dragover', (event) => event.preventDefault())
+  drop.addEventListener('drop', (event) => {
+    event.preventDefault()
+    const name = event.dataTransfer?.files?.[0]?.name
+    document.getElementById('inner-drop-out').textContent = name ? 'file:' + name : 'text:' + (event.dataTransfer?.getData('text/plain') || '')
+  })
+</script>
+<iframe id="deep" title="deep" width="300" height="90" src="/browser-bridge/dev/fixture-deep"></iframe>
+<div id="inner-drop" style="width:220px;height:80px;border:2px dashed #888">drop here</div>
+<p>dropped: <code id="inner-drop-out">(none)</code></p>
+</body>
+</html>
