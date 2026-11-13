@@ -1,6 +1,6 @@
 {
   "name": "browser-bridge",
-  "version": "1.1.269",
+  "version": "1.1.270",
   "private": true,
   "type": "module",
   "description": "Drive the Chrome you are logged into through a paired extension: thirteen tools, one pairing setting, no UI.",
@@ -25,10 +25,8 @@
     "bridge.js",
     "tools.js",
     "skill/**",
-    "dist/browser-bridge-extension.zip",
-    "dist/browser-bridge-extension.crx",
-    "dist/updates.xml",
-    "dist/extension-meta.json",
+    "extension/**",
+    "scripts/**",
     "locale/*.json",
     "icon.svg"
   ],

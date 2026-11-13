@@ -4,8 +4,8 @@ import fs from "node:fs"
  * End-to-end test: drives the real Chrome through the plugin's own protocol
  * (via the dev-only /browser-bridge/dev/command route) against tests/fixture.html.
  *
- * Requires: the plugin running with devReload, a connected browser, and
- * `node scripts/pack-extension.mjs` having produced dist/.
+ * Requires: the plugin running with devReload and a connected browser. The
+ * extension zip is packed on demand, so there is nothing to build first.
  *
  * Each step is a raw worker command, so this exercises the transport, the
  * worker command table and the page — not the model-facing tool wrappers.

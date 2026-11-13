@@ -229,6 +229,38 @@ try {
   assert.ok(hostSource.includes("'/browser-bridge/api/browsers'"), 'index.js lost the /browser-bridge/api/browsers route')
   console.log('ok  web routes register through ctx.inject (no startup race)')
 
+  // Packaging guard: the extension is ONE zip, packed on demand from extension/.
+  // A .crx, an update manifest or a policy route would mean the packaging
+  // contract regressed; a drifting id would orphan pairing and storage.
+  {
+    const { packExtension, ZIP_NAME } = await import('../scripts/pack-extension.mjs')
+    const { mkdtempSync, readdirSync, readFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join: joinPath } = await import('node:path')
+    const tmp = mkdtempSync(joinPath(tmpdir(), 'bsb-pack-'))
+    try {
+      const info = packExtension({ dist: tmp })
+      assert.equal(info.id, 'pcmkkicdcomiljgbbbdnjknphlgibnno', 'the pinned extension id changed')
+      assert.ok(info.rebuilt, 'the first pack did not build a zip')
+      const zip = readFileSync(joinPath(tmp, ZIP_NAME))
+      assert.equal(zip.subarray(0, 4).toString('hex'), '504b0304', 'the download is not a zip')
+      for (const name of ['manifest.json', 'popup.html', 'sw.js', 'icons/icon16.png']) {
+        assert.ok(zip.includes(Buffer.from(name)), `zip is missing ${name}`)
+      }
+      assert.ok(zip.includes(Buffer.from('"key"')), 'packed manifest lost the pinned public key')
+      assert.deepEqual(readdirSync(tmp).sort(), [ZIP_NAME], 'packing left extra artifacts (crx/temp/meta)')
+      assert.equal(packExtension({ dist: tmp }).rebuilt, false, 'a fresh zip is repacked on every call')
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+    assert.ok(/packExtension\(\{ src: extensionDir, dist: dirname\(EXTENSION_ZIP\) \}\)/.test(hostSource),
+      'index.js no longer packs the extension on download')
+    assert.ok(!hostSource.includes('/browser-bridge/extension.crx'), 'index.js still serves a .crx route')
+    assert.ok(!hostSource.includes('/browser-bridge/updates.xml'), 'index.js still serves an update manifest')
+    assert.ok(!hostSource.includes('/browser-bridge/install-policy.reg'), 'index.js still serves the crx policy installer')
+    console.log('ok  the extension ships as an on-demand zip (no crx, pinned id)')
+  }
+
   // Architecture guard: model-supplied JavaScript runs in the guarded isolated
   // world by default; the page's own world is reachable only when the caller
   // explicitly asks for world:'main' (needed to read framework state such as a

@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Bridge, loadToken, resolveDshHome } from './bridge.js'
 import { toHandler } from './http-adapter.js'
+import { packExtension, ZIP_NAME } from './scripts/pack-extension.mjs'
 
 // tools.js is loaded dynamically with a cache-busting query on purpose.
 //
@@ -25,7 +26,7 @@ import { toHandler } from './http-adapter.js'
 // the mismatch looks like a bug in the extension. A unique query forces a fresh
 // module instance on every reload, which is what "toggle the bundle" promises.
 const toolModuleUrl = new URL('./tools.js', import.meta.url)
-const TOOLS_BUILD = '1.1.269'
+const TOOLS_BUILD = '1.1.270'
 toolModuleUrl.searchParams.set('reload', String(Date.now()))
 const { registerTools } = await import(toolModuleUrl.href)
 
@@ -35,7 +36,7 @@ export const inject = ['tools', 'attachments']
 
 const here = dirname(fileURLToPath(import.meta.url))
 /** Bumped by the release script; proves which host code is live. */
-const HOST_BUILD = '1.1.269'
+const HOST_BUILD = '1.1.270'
 const EXTENSION_ZIP = join(here, 'dist', 'browser-bridge-extension.zip')
 
 /**
@@ -316,60 +317,41 @@ export function apply(ctx, config = {}) {
       path,
       handler: toHandler(resource, path, methods ? { methods } : undefined),
     })
-    const served = {
-      '/browser-bridge/extension.zip': ['browser-bridge-extension.zip', 'application/zip', 'browser-bridge-extension.zip'],
-      '/browser-bridge/extension.crx': ['browser-bridge-extension.crx', 'application/x-chrome-extension', 'browser-bridge-extension.crx'],
-      '/browser-bridge/updates.xml': ['updates.xml', 'application/xml', undefined],
-    }
-    const baseOf = (request) => {
-      const host = request?.headers?.get?.('host')
-      return host ? `http://${host}` : webServer.getOrigin()
-    }
-    for (const [routePath, [file, type, download]] of Object.entries(served)) {
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: routePath,
-        resource: async (request) => {
-          try {
-            let body = readFileSync(join(here, 'dist', file))
-            if (file === 'updates.xml') body = Buffer.from(body.toString('utf8').replaceAll('__BASE__', baseOf(request)))
-            return new Response(body, {
-              headers: {
-                'content-type': type,
-                'cache-control': 'no-store',
-                ...(download ? { 'content-disposition': `attachment; filename="${download}"` } : {}),
-              },
-            })
-          } catch {
-            return new Response('not built: run scripts/pack-extension.mjs', { status: 404 })
-          }
-        },
-      }), `browser-bridge: ${routePath}`)
+    // The extension download is packed on demand from extension/: dist/ is
+    // output, not a shipped artifact, and a fresh checkout has no zip at all.
+    // Single-flight so a double click and the dashboard's meta poll share one
+    // archive; packExtension() itself skips the work while the zip is current.
+    const extensionDir = join(here, 'extension')
+    let packing = null
+    const ensureExtensionZip = () => {
+      if (!packing) {
+        packing = Promise.resolve().then(() => packExtension({ src: extensionDir, dist: dirname(EXTENSION_ZIP) }))
+          .finally(() => { packing = null })
+      }
+      return packing
     }
 
-    // The only automatic install Chrome honours: an enterprise policy entry that
-    // points at the update manifest above. Written per-user, so no admin needed.
     ctx.effect(() => registerRoute({
       kind: 'exact',
-      path: '/browser-bridge/install-policy.reg',
-      resource: async (request) => {
-        let id = ''
-        try { id = JSON.parse(readFileSync(join(here, 'dist', 'extension-meta.json'), 'utf8')).id } catch {}
-        const body = [
-          'Windows Registry Editor Version 5.00',
-          '',
-          '[HKEY_CURRENT_USER\\Software\\Policies\\Google\\Chrome\\ExtensionInstallForcelist]',
-          `"1"="${id};${baseOf(request)}/browser-bridge/updates.xml"`,
-          '',
-        ].join('\r\n')
-        return new Response(body, {
-          headers: {
-            'content-type': 'application/octet-stream',
-            'content-disposition': 'attachment; filename="browser-bridge-policy.reg"',
-          },
-        })
+      path: '/browser-bridge/extension.zip',
+      resource: async () => {
+        try {
+          const { zipPath } = await ensureExtensionZip()
+          return new Response(readFileSync(zipPath), {
+            headers: {
+              'content-type': 'application/zip',
+              'cache-control': 'no-store',
+              'content-disposition': `attachment; filename="${ZIP_NAME}"`,
+            },
+          })
+        } catch (error) {
+          return new Response(JSON.stringify({ ok: false, error: String(error?.message ?? error) }), {
+            status: 500,
+            headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+          })
+        }
       },
-    }), 'browser-bridge: policy')
+    }), 'browser-bridge: extension zip')
 
     const apiJson = (value, status = 200) => new Response(JSON.stringify(value), {
       status,
@@ -575,8 +557,14 @@ export function apply(ctx, config = {}) {
       path: '/browser-bridge/extension-meta.json',
       resource: async () => {
         try {
-          const meta = JSON.parse(readFileSync(join(here, 'dist', 'extension-meta.json'), 'utf8'))
-          return apiJson({ ...meta, devReload })
+          const info = await ensureExtensionZip()
+          return apiJson({
+            id: info.id,
+            version: info.version,
+            publicKey: info.publicKey,
+            zipBytes: info.bytes,
+            devReload,
+          })
         } catch {
           return apiJson({ devReload })
         }

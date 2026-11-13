@@ -2,9 +2,8 @@
  * Client half: extension install controls on this bundle's page.
  *
  * Chrome refuses to install an off-store extension from a page, so there is no
- * honest "one-click install" button. This offers the three things that do work:
- * the signed .crx (policy or manual), the load-unpacked .zip (always works), and
- * a policy file that makes Chrome install it automatically on the next start.
+ * honest "one-click install" button. The host packs the extension on demand and
+ * this serves the unpacked zip: download, unzip, Load unpacked.
  */
 
 window.__ModuleLoader__.load({
@@ -251,7 +250,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { style: row },
-          h('a', { style: primary, href: '/browser-bridge/extension.zip', download: '' }, 'Download .zip (unpacked)'),
+          h('a', { style: primary, href: '/browser-bridge/extension.zip', download: '' }, 'Download extension (.zip)'),
           meta?.devReload
             ? h('button', {
                 style: { ...filled, padding: '7px 12px' },
@@ -262,8 +261,8 @@ window.__ModuleLoader__.load({
         h(
           'p',
           { style: muted },
-          'Chrome cannot install a .crx from outside the Web Store, so this ships the unpacked '
-          + 'build: unzip it, then load it from chrome://extensions. Full steps are in README.md.',
+          'The zip is packed from this install on download. Unzip it, then load the folder '
+          + 'with Load unpacked on chrome://extensions. Full steps are in README.md.',
         ),
       )
     }

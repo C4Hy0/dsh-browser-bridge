@@ -13,9 +13,9 @@ docs/COPY_AGENTS.md
 docs/PLAN.md
 docs/ui/
 
-# Extension signing key: kept outside the repository, generated on demand by
-# scripts/pack-extension.mjs when missing (a new key means a new extension id).
-dist/extension-key.pem
+# Generated output: the extension zip is packed on download, never committed
+dist/
+# No signing material belongs here (there is no .crx to sign)
 *.pem
 *.key
 .env*
