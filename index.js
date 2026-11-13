@@ -1,9 +1,8 @@
 /**
- * browser-bridge — the host half.
+ * browser-bridge: the host half.
  *
- * Starts one loopback endpoint and registers twenty-one tools. That is the entire
- * plugin: no client row, no settings panel, no panel or sidebar. The user-facing
- * surface is the extension popup and `bsb_browsers` reports the connection.
+ * Starts one loopback endpoint and registers ten tools. Serves the extension zip,
+ * the plugin page cards, and the build and pairing endpoints.
  *
  * @module browser-bridge
  */
