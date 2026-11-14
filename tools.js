@@ -1105,6 +1105,7 @@ export function registerTools(ctx, bridge) {
       maxChars: { type: 'number', description: 'text/html: cap the reply length.' },
       maxElements: { type: 'number', description: 'text: max interactive elements (default 60, max 200).' },
       probe: { type: 'array', items: { type: 'string' }, description: 'text: extra selectors whose box you need (canvas, map), max 20.' },
+      frame: { type: 'string', description: 'text mode: read inside this child frame (id/prefix, URL substring, or index). A cross-origin frame fails with FRAME_NOT_READABLE.' },
       selector: { type: 'string', description: 'rows: elements to read. html: element to dump.' },
       limit: { type: 'number', description: 'rows: max rows (default 50).' },
       offset: { type: 'number', description: 'rows: skip this many (paging).' },
@@ -1140,6 +1141,7 @@ export function registerTools(ctx, bridge) {
         maxChars: clampInt(args?.maxChars, 6000, 200, MAX_CHARS),
         maxElements: clampInt(args?.maxElements, 60, 1, MAX_ELEMENTS),
         probe: Array.isArray(args?.probe) ? args.probe.filter((value) => typeof value === 'string').slice(0, 20) : undefined,
+        frame: stringArg(args, 'frame'),
       }, opts)
     },
   })

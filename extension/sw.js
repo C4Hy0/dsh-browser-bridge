@@ -401,7 +401,20 @@ async function wheelPage({ x, y, deltaX, deltaY, modifiers, tabId: hint }) {
     .map((name) => bits[String(name).toLowerCase()])
     .filter((bit) => typeof bit === 'number')
     .reduce((all, bit) => all | bit, 0)
-  await send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: px, y: py, deltaX: dx, deltaY: dy, modifiers: mask })
+  // A hidden tab never acks a wheel event (the compositor owns it), which used
+  // to hang the command until the 30 s worker timeout. Fail in 1.5 s with the
+  // recovery step instead.
+  const dispatched = send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: px, y: py, deltaX: dx, deltaY: dy, modifiers: mask })
+  const hidden = new Promise((_, reject) => setTimeout(
+    () => reject(fail('TAB_NOT_VISIBLE', 'wheel needs the tab in front; bring it forward with bsb_tabs use, then retry')),
+    1500,
+  ))
+  try {
+    await Promise.race([dispatched, hidden])
+  } catch (error) {
+    if (error?.code === 'TAB_NOT_VISIBLE') throw error
+    throw error
+  }
   const meta = await pageMeta(tabId)
   return { url: meta?.url ?? '', title: meta?.title ?? '', at: { x: px, y: py }, deltaX: dx, deltaY: dy, modifiers: mask }
 }
