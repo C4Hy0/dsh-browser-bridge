@@ -840,6 +840,7 @@ try {
   assert.ok(/'wheel'/.test(toolsSource) && /mouseWheel/.test(workerSource), 'bsb_act lost wheel input')
   assert.ok(/sentKeys/.test(workerSource) && /keyDelayMs/.test(toolsSource), 'key text mode lost its report or delay')
   assert.ok(/FRAME_NOT_READABLE/.test(workerSource), 'bsb_read no longer fails loudly on a cross-origin frame')
+  assert.ok(/cross-origin or out-of-process/.test(workerSource) && /frames this tab can read/.test(workerSource), 'frame read no longer distinguishes an unreachable frame from a missing one')
   assert.ok(/NOT_EDITABLE/.test(workerSource), 'type no longer refuses a non-editable target')
   assert.ok(/installOnNewDocument/.test(toolsSource) && /addScriptToEvaluateOnNewDocument/.test(workerSource), 'bsb_eval lost document-start injection')
   assert.ok(/const tracked = this\.activeBrowserId/.test(bridgeSource), 'browser resolution no longer prefers the tracked target')

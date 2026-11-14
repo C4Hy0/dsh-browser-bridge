@@ -1170,9 +1170,28 @@ async function readPage({ maxChars, maxElements, probe, frame, tabId: hint }) {
       frameHit = resolved.frame
       contextId = resolved.contextId
     } catch (error) {
+      // Page.getFrameTree omits out-of-process frames, so a real cross-origin
+      // frame looks exactly like a typo. Ask the DOM what the frame is: if an
+      // iframe with that id, name or src exists, it is a readable-looking frame
+      // the tab target cannot reach, not a missing one.
+      const probe = await evaluate(tabId, `(() => {
+        const want = ${JSON.stringify(String(frame))};
+        const list = Array.from(document.querySelectorAll('iframe, frame'));
+        const hit = list.find((el) => el.id === want || el.name === want || (el.src && el.src.includes(want)));
+        return hit ? { url: hit.src || '', name: hit.id || hit.name || '' } : null;
+      })()`).catch(() => null)
+      if (probe) {
+        throw fail(
+          'FRAME_NOT_READABLE',
+          `frame ${JSON.stringify(String(frame))} (${probe.url || 'no url'}) is cross-origin or out-of-process, so the tab target cannot read it: open ${probe.url} at its own URL, or read the frame element with bsb_eval. It was not silently replaced by the parent page.`,
+        )
+      }
+      const visible = await frameList(tabId)
+        .then((frames) => frames.map((entry) => entry.url || entry.frameId).filter(Boolean))
+        .catch(() => [])
       throw fail(
-        'FRAME_NOT_READABLE',
-        `bsb_read could not read frame ${JSON.stringify(String(frame))}: ${error?.message ?? 'the frame is not inspectable'}. A cross-origin frame cannot be read from the tab target; open it at its own URL or read the frame element instead.`,
+        'FRAME_NOT_FOUND',
+        `no frame matches ${JSON.stringify(String(frame))}; frames this tab can read: ${visible.join(', ') || '(none)'}`,
       )
     }
   }
