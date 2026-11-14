@@ -5,6 +5,10 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Jidaron/dsh-browser-bridge/actions/workflows/ci.yml"><img src="https://github.com/Jidaron/dsh-browser-bridge/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+</p>
+
 A DeepSeek Harness plugin and a Chromium extension that let an agent drive the
 browser you are already signed into. The agent opens a tab, reads it, and acts on
 it through the DevTools Protocol. It does not start a second browser, copy
