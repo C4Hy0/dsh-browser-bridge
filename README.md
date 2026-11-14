@@ -69,7 +69,7 @@ Every page tool accepts `frame` (a frame id, URL substring, or index) and
 `browser` (a browser id, id prefix, or label substring). `bsb_act` performs one
 action per call. The tool schemas carry the full parameter lists.
 
-A bundled skill, `bsb-browser`, holds the workflow playbook: tool choice, the
+A bundled skill, `browser-bridge`, holds the workflow playbook: tool choice, the
 read/act/wait loop, canvas and WebGL pages, iframes, network debugging, and
 recovery. It registers from the skill catalog when the plugin loads, so there is
 no project skill file to copy.
@@ -194,7 +194,7 @@ http-adapter.js   Node handler adapter for the web routes
 client.js         plugin page cards
 extension/        MV3 worker, popup, discovery, identity
 scripts/          zip packer and the extension public key
-skill/            bundled bsb-browser playbook
+skill/            bundled browser-bridge playbook
 tests/            selftest, e2e, webserver compatibility, fixtures
 ```
 

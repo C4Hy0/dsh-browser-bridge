@@ -25,7 +25,7 @@ import { packExtension, ZIP_NAME } from './scripts/pack-extension.mjs'
 // the mismatch looks like a bug in the extension. A unique query forces a fresh
 // module instance on every reload, which is what "toggle the bundle" promises.
 const toolModuleUrl = new URL('./tools.js', import.meta.url)
-const TOOLS_BUILD = '1.1.272'
+const TOOLS_BUILD = '1.1.273'
 toolModuleUrl.searchParams.set('reload', String(Date.now()))
 const { registerTools } = await import(toolModuleUrl.href)
 
@@ -35,7 +35,7 @@ export const inject = ['tools', 'attachments']
 
 const here = dirname(fileURLToPath(import.meta.url))
 /** Bumped by the release script; proves which host code is live. */
-const HOST_BUILD = '1.1.272'
+const HOST_BUILD = '1.1.273'
 const EXTENSION_ZIP = join(here, 'dist', 'browser-bridge-extension.zip')
 
 /**
@@ -572,18 +572,18 @@ export function apply(ctx, config = {}) {
   })
 
   // Ship the workflow playbook with the plugin: any profile that installs
-  // browser-bridge gets `bsb-browser` in its skill catalog, with no project
+  // browser-bridge gets `browser-bridge` in its skill catalog, with no project
   // skill file to copy. `inject` waits for the skill service, and the effect is
   // tied to that injected scope so disabling the plugin removes the entry.
   try {
-    const bundledSkill = readBundledSkill(join(here, 'skill', 'bsb-browser', 'SKILL.md'))
+    const bundledSkill = readBundledSkill(join(here, 'skill', 'browser-bridge', 'SKILL.md'))
     ctx.inject(['skills'], (skillCtx) => {
       skillCtx.effect(() => skillCtx.skills.register({
         ...bundledSkill,
         source: 'browser-bridge',
-        path: join(here, 'skill', 'bsb-browser', 'SKILL.md'),
+        path: join(here, 'skill', 'browser-bridge', 'SKILL.md'),
         metadata: { owner: 'browser-bridge' },
-      }), 'browser-bridge: bsb-browser skill')
+      }), 'browser-bridge: bundled skill')
     })
   } catch (error) {
     ctx.logger.warn(`browser-bridge: bundled skill unavailable: ${error?.message ?? error}`)

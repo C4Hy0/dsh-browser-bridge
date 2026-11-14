@@ -233,7 +233,7 @@ export function registerTools(ctx, bridge) {
   register({
     name: 'bsb_browsers',
     description:
-      'List the browsers connected to this harness, the default target, and whether each responds. Use first when a tool reports no browser, or before targeting a specific browser. The bsb-browser skill has the full workflow playbook.',
+      'List the browsers connected to this harness, the default target, and whether each responds. Use first when a tool reports no browser, or before targeting a specific browser. The browser-bridge skill has the full workflow playbook.',
     parameters: input({}),
     output: {
       schema: {
