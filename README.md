@@ -1,4 +1,4 @@
-# browser-bridge
+<h1 align="center"><img src="icon.svg" width="40" height="40" alt="" align="middle"> Browser Bridge</h1>
 
 A DeepSeek Harness plugin and a Chromium extension that let an agent drive the
 browser you are already signed into. The agent opens a tab, reads it, and acts on
@@ -9,6 +9,16 @@ host plugin and pairs with it.
 Ten tools cover reading, input, waiting, screenshots, pixel sampling, network and
 console observation, and script evaluation. The host plugin listens on one local
 port and serves the extension zip and a small dashboard on the plugin page.
+
+## Screenshots
+
+The extension popup, paired and connected:
+
+![Browser Bridge extension popup](images/popup.png)
+
+The plugin page in DSH, showing the connected browsers and the extension download:
+
+![Browser Bridge plugin page](images/plugin-page.png)
 
 ## Requirements
 
@@ -195,6 +205,7 @@ client.js         plugin page cards
 extension/        MV3 worker, popup, discovery, identity
 scripts/          zip packer and the extension public key
 skill/            bundled browser-bridge playbook
+images/           screenshots used by this README
 tests/            selftest, e2e, webserver compatibility, fixtures
 ```
 

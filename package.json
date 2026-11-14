@@ -26,7 +26,8 @@
     "skill/**",
     "extension/**",
     "scripts/**",
-    "icon.svg"
+    "icon.svg",
+    "images/**"
   ],
   "dsh": {
     "bundle": {
