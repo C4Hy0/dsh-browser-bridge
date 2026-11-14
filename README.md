@@ -25,8 +25,12 @@ The plugin page in DSH, showing connected browsers and the extension download:
 The lamp and the word beside it carry the connection state. A failed pairing
 turns the Pair button red until the field changes.
 
+The band at the bottom encodes the browser id. With no id yet, the strip is a
+single quiet rule instead of a pattern.
+
 | State | Preview |
 | --- | --- |
+| Never connected, before an identity exists (flat band) | <img src="images/popup-never-connected.png" width="320" alt="Popup never connected state with a flat band"> |
 | Checking, before the first status read | <img src="images/popup-checking.png" width="320" alt="Popup checking state"> |
 | Not connected | <img src="images/popup-not-connected.png" width="320" alt="Popup not connected state"> |
 | Reconnecting, amber lamp | <img src="images/popup-reconnecting.png" width="320" alt="Popup reconnecting state"> |
