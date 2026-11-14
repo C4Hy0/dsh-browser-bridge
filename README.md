@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="icon.svg" width="72" height="72" alt="Browser Bridge icon">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/banner-dark.svg">
+    <img src="images/banner-light.svg" width="400" height="88" alt="Browser Bridge">
+  </picture>
 </p>
-
-<h1 align="center">Browser Bridge</h1>
 
 A DeepSeek Harness plugin and a Chromium extension that let an agent drive the
 browser you are already signed into. The agent opens a tab, reads it, and acts on
