@@ -58,12 +58,12 @@ actually running.
 | `bsb_open` | Opens a URL and makes it the tracked tab. The new tab stays in the background unless `activate: true`. |
 | `bsb_tabs` | Lists, adopts, reloads, or closes tabs. |
 | `bsb_read` | Reads the page. `mode: "text"` returns visible text, interactive elements with `@eN` refs, and viewport data; `"rows"` returns selector matches as structured rows; `"html"` returns one element's `outerHTML`. |
-| `bsb_act` | Performs one input action: click, hover, type, set, select, key, scroll, drag, drop, upload, or `drive` for canvas steering. It also has `forceActive` and `releaseActive` for pages whose frame clock has stopped. |
+| `bsb_act` | Performs one input action: click, hover, type, set, select, key, wheel, scroll, drag, drop, upload, or `drive` for canvas steering. `key` takes a named key, held keys, `steps`, or `text` to send one real key event per character. It also has `forceActive` and `releaseActive` for pages whose frame clock has stopped. |
 | `bsb_wait_for` | Waits for a selector, text, URL, enabled control, settled box, JS expression, network request, or a fixed delay. |
 | `bsb_capture` | Saves screenshots, selector contact sheets, or a recording to disk and returns file paths for `read_image`. |
 | `bsb_pixels` | Samples an element as a colour grid or at exact points. Reads only; useful for canvas boards and maps that a DOM query cannot address. |
 | `bsb_observe` | Records the page's own network requests, console messages and exceptions, or samples an element over time. |
-| `bsb_eval` | Evaluates JavaScript and returns the value. Runs in a read-only isolated world by default; `world: "main"` opts into the page's own world. |
+| `bsb_eval` | Evaluates JavaScript and returns the value. Runs in a read-only isolated world by default; `world: "main"` opts into the page's own world. Also installs document-start scripts (`installOnNewDocument`) that run before every new document of the tab. |
 
 Every page tool accepts `frame` (a frame id, URL substring, or index) and
 `browser` (a browser id, id prefix, or label substring). `bsb_act` performs one
@@ -92,6 +92,11 @@ The pairing token is 32 random bytes in hex, stored at
   metrics. A background tab stays throttled and the tools report the frame rate
   they measure. The one exception, `forceActive`, must be requested by name and
   the reply states what was forced.
+- Document-start scripts. `bsb_eval installOnNewDocument` registers page code that
+  runs before the document's own scripts in every new document, across reloads.
+  It is page code, not the read-only world, and it must be asked for by name;
+  `listOnNewDocument` and `removeOnNewDocument` manage it. Registrations end when
+  the tab's debugger session detaches.
 - Read-only inspection. `bsb_eval` and the `expression` form of `bsb_wait_for`
   run in an isolated world where writes to nodes connected to the document throw
   `READ_ONLY`. A detached subtree stays writable, so building a canvas for
@@ -118,9 +123,8 @@ The row in `cordis.patch.yml`:
 config:
   port: 8791
   bind: '0.0.0.0'
-  # advertise: '192.168.1.20'
   allowRemotePairing: true
-  devReload: true
+  devReload: false
 ```
 
 | Key | Default | Effect |
@@ -128,7 +132,7 @@ config:
 | `port` | 8791 | Listener port. The extension probes 8791-8811 on connect. A port outside that range still works when the pairing link is pasted. |
 | `bind` | `0.0.0.0` | Address to listen on. Use `127.0.0.1` for this machine only. |
 | `advertise` | auto | Address written into the pairing URL. Defaults to the first private IPv4. |
-| `allowRemotePairing` | false | Whether `/discover` hands the token to a non-loopback peer. |
+| `allowRemotePairing` | true | Whether `/discover` hands the token to a non-loopback peer. |
 | `devReload` | false | Registers the dev routes: fixture pages, the arcade page, the dev command channel, and extension reload support. |
 
 Port changes made from the plugin page are stored in

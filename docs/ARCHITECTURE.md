@@ -58,6 +58,12 @@ The plugin inspects pages and sends input. It does not edit them.
 - No focus or lifecycle emulation. `Emulation.setFocusEmulationEnabled` and a
   forced `Page.setWebLifecycleState` are never sent. A background tab stays
   throttled, and the tools report the frame rate they measure.
+- Document-start scripts are the other opt-in escape hatch. `bsb_eval`
+  `installOnNewDocument` registers page code that runs before the document's own
+  scripts in every new document, across reloads, until removed or the debugger
+  detaches. It runs in the page, not in the guarded world, and the caller must
+  name the option. `tests/selftest.mjs` keeps the CDP call confined to the
+  install/remove handlers.
 - `forceActive` is the only visibility override. It must be requested by name,
   the reply states what was forced and the visibility the page then reported,
   and a held override is mirrored into session storage so a worker restart

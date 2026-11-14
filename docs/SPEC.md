@@ -1,6 +1,6 @@
 # browser-bridge protocol and command reference
 
-This document describes host 1.1.270 and extension 1.0.261. Where it disagrees
+This document describes host 1.1.271 and extension 1.0.262. Where it disagrees
 with the code, the code wins: `extension/sw.js` holds the worker command table,
 `tools.js` the model-facing schemas, and `bridge.js` the HTTP routes.
 
@@ -84,12 +84,13 @@ these methods.
 
 - Page: `open`, `openUrl`, `read`, `html`, `frames`, `close`, `eval`, `waitFor`,
   `inspect`.
-- Input: `click`, `hover`, `type`, `key`, `scroll`, `drag`, `drop`, `upload`,
-  `set`, `select`.
+- Input: `click`, `hover`, `type`, `key`, `scroll`, `wheel`, `drag`, `drop`,
+  `upload`, `set`, `select`.
 - Page state: `forceActive`, `releaseActive`, `drive`, `measure`.
 - Capture: `screenshot`, `record`, `sheet`, `imageSource`, `pixels`.
 - Observe: `network`, `console`, `timeline`.
 - Tabs: `tabs`, `use`, `closeTab`, `openExtensionPage`.
+- Document start: `evalInstall`, `evalRemove`, `evalList`.
 
 Parameters and result shapes live in the tool schemas and the worker handlers.
 
@@ -104,6 +105,12 @@ Parameters and result shapes live in the tool schemas and the worker handlers.
   frame target applies.
 - `bsb_act` performs one action per call. `drive`, `measure` and multi-step
   `key` gestures are single calls that run a closed loop inside the extension.
+  `bsb_act key` with `text` sends one real keydown/keyup per character
+  (`keyDelayMs`, default 40) and reports `sentKeys`; `bsb_act wheel` sends a
+  wheel event at x/y with `deltaX`/`deltaY`.
+- `bsb_read frame:` reads inside a child frame; a frame that cannot be reached
+  from the tab target fails with `FRAME_NOT_READABLE` instead of returning the
+  parent page.
 
 ## 8. Extension
 

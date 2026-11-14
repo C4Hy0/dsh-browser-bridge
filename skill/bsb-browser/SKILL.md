@@ -20,7 +20,7 @@ Start with the tracked page. If the user says a page is already open, **adopt it
 | Already-open page, reload, close | `bsb_tabs` (`list`/`use`/`reload`/`close`) |
 | New URL | `bsb_open` (background by default; `activate:true` to show) |
 | Read text / find controls / scrape rows / DOM | `bsb_read` (`text`/`rows`/`html`) |
-| Click, type, key, slider, drag, upload, game input | `bsb_act` |
+| Click, type, key, wheel, slider, drag, upload, game input | `bsb_act` |
 | Page state, canvas, geometry, authenticated fetch | `bsb_eval` |
 | Wait for load/enable/network/URL | `bsb_wait_for` |
 | Screenshot, burst, contact sheet, recording | `bsb_capture` |
@@ -39,8 +39,9 @@ Start with the tracked page. If the user says a page is already open, **adopt it
    element; avoid regex over raw HTML.
 3. **Act.** `bsb_act` does one action: `click` (`target`/`@eN`/`text`/`x,y`;
    `targets` batch; `all`), `hover`, `type` (+`submit`), `set` (sliders,
-   framework-bound inputs), `select`, `key` (`holdMs`, `keys`, `steps` for timed
-   sequences, `measure`/`settle` for canvas games), `scroll`, `drag` (with
+   framework-bound inputs), `select`, `key` (`holdMs`, `keys`, `text` to send
+   one real key event per character, `steps` for timed sequences,
+   `measure`/`settle` for canvas games), `scroll`, `wheel`, `drag` (with
    `path` for sliders/maps), `drop`, `upload`, `drive`/`measure` (canvas
    steering/state), `forceActive`/`releaseActive` (page-lifecycle override).
 4. **Wait properly.** After a click that loads or animates, use `bsb_wait_for`
@@ -114,6 +115,23 @@ Start with the tracked page. If the user says a page is already open, **adopt it
   Enter. `set` handles sliders/checkboxes and framework-bound inputs; `select`
   chooses an option. `upload` takes local file paths; `drop` handles drag-drop
   zones. JS dialogs during a read are auto-dismissed and reported.
+
+## Canvas and key-driven pages
+
+- `type` writes into inputs, textareas and contenteditable elements; it refuses a
+  canvas with `NOT_EDITABLE`. Use `bsb_act action:"key" text:"..."` (one real
+  keydown per character, `keyDelayMs` between them) for engines that read keys.
+- `bsb_act action:"wheel"` sends a real wheel event at x/y for maps, zoom and
+  panels that listen to `wheel` rather than `scroll`.
+- To run code before a page's own scripts (hook WebAssembly or fetch, patch a
+  loader, seed state on every load), install a document-start script with
+  `bsb_eval {installOnNewDocument:true, expression:"..."}`. List it with
+  `listOnNewDocument`, remove it with `removeOnNewDocument` and the returned
+  `scriptId`. It runs in every new document of the tab, including reloads, until
+  removed or the debugger detaches. This is page code, not the read-only world.
+- A cross-origin iframe cannot be read from the tab target. `bsb_read` with
+  `frame:` fails with `FRAME_NOT_READABLE` naming the frame; open that URL
+  directly or read the frame element instead.
 
 ## Safety and neutrality
 

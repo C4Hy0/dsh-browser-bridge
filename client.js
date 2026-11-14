@@ -137,11 +137,11 @@ window.__ModuleLoader__.load({
       if (!response.ok) {
         if (text) throw new Error(`${what} answered ${response.status}: ${text.slice(0, 160)}`)
         const hint = response.status === 404
-          ? 'the route is not mounted — reload the plugin bundle'
+          ? 'the route is not mounted. Reload the plugin bundle.'
           : response.status === 400
             ? 'the route is mounted but failed before answering; the plugin half is probably built for a different harness version'
             : 'the response was empty'
-        throw new Error(`${what} answered ${response.status} with an empty body — ${hint}`)
+        throw new Error(`${what} answered ${response.status} with an empty body (${hint})`)
       }
       try {
         return JSON.parse(text)
@@ -172,7 +172,7 @@ window.__ModuleLoader__.load({
           else if (bridge.listening === false) {
             // The plugin is loaded but its endpoint never bound; say why here
             // instead of letting the extension report an unreachable port.
-            stopped = [bridge.error, bridge.hint].filter(Boolean).join(' — ') || 'the plugin endpoint is not listening'
+            stopped = [bridge.error, bridge.hint].filter(Boolean).join('; ') || 'the plugin endpoint is not listening'
           }
         }
       } catch {}
@@ -203,7 +203,7 @@ window.__ModuleLoader__.load({
       const error = reply && typeof reply === 'object' && typeof reply.error === 'string' ? reply.error : ''
       return {
         ok: false,
-        error: error || 'the extension did not answer — reload it from chrome://extensions, then press Connect again',
+        error: error || 'the extension did not answer. Reload it from chrome://extensions, then press Connect again',
       }
     }
 
@@ -242,7 +242,7 @@ window.__ModuleLoader__.load({
         h(
           'p',
           { style: muted },
-          'Unpacked build of this dsh’s extension.',
+          'Unpacked build of the extension for this dsh.',
         ),
         meta && meta.id
           ? h('p', { style: muted }, `Extension ID ${meta.id} · v${meta.version}`)

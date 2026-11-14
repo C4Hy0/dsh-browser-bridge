@@ -666,13 +666,22 @@ try {
   // is therefore positional: these names must not appear anywhere else, and the
   // attach path in particular must never reach them.
   const FORBIDDEN_ANYWHERE = [
-    'addScriptToEvaluateOnNewDocument',
     'Page.addStyleTag',
     'DOM.setOuterHTML',
     'DOM.setAttributeValue',
   ]
   const regressions = FORBIDDEN_ANYWHERE.filter((needle) => workerSource.includes(needle))
   assert.deepEqual(regressions, [], `extension/sw.js changes page state: ${regressions.join(', ')}`)
+  // Document-start scripts are a second named escape hatch: a caller asks for
+  // one explicitly, it runs in every new document, and it is page code by
+  // design. It is allowed only inside evalInstall/evalRemove, never on attach.
+  const INJECTION = ['addScriptToEvaluateOnNewDocument', 'removeScriptToEvaluateOnNewDocument']
+  const injectStart = workerSource.indexOf('async function evalInstall')
+  const injectEnd = workerSource.indexOf('async function execute(')
+  assert.ok(injectStart > 0 && injectEnd > injectStart, 'the document-start escape hatch is gone')
+  const outsideInjection = workerSource.slice(0, injectStart) + workerSource.slice(injectEnd)
+  const escapedInjection = INJECTION.filter((needle) => outsideInjection.includes(needle))
+  assert.deepEqual(escapedInjection, [], `document-start calls escaped their hatch: ${escapedInjection.join(', ')}`)
   const GATED = ['setFocusEmulationEnabled', 'setWebLifecycleState']
   const forceStart = workerSource.indexOf('async function forceActive')
   // clearForced also touches these, and it is part of the same hatch: the region
@@ -718,6 +727,9 @@ try {
     // hatch, which the positional guard above enforces. A caller has to ask for
     // them by name, for one call, and the reply reports that it happened.
     'Emulation.setFocusEmulationEnabled', 'Page.setWebLifecycleState',
+    // Document-start injection is the second named hatch. Only evalInstall and
+    // evalRemove call these; the positional guard above keeps them there.
+    'Page.addScriptToEvaluateOnNewDocument', 'Page.removeScriptToEvaluateOnNewDocument',
   ])
   const used = [...new Set([...workerSource.matchAll(/'(?:Page|Emulation|Runtime|Input|DOM|Network|Log|Target|Browser|Overlay|Security|Fetch|Storage|Tracing|Animation|Profiler|HeapProfiler)\.[A-Za-z]+'/g)].map((m) => m[0].slice(1, -1)))]
   const unreviewed = used.filter((method) => !CDP_ALLOWED.has(method))
@@ -820,6 +832,18 @@ try {
     }
   }
   console.log('ok  dev fixtures live in tests/ and are served from there')
+
+  // Guards from the CaptchaWare run. Each of these was a silent failure or a
+  // missing primitive that cost a workaround, so pin the contract: wheel input,
+  // key-driven text, cross-origin frame reads, non-editable type targets,
+  // document-start injection, and the tracked-browser default.
+  assert.ok(/'wheel'/.test(toolsSource) && /mouseWheel/.test(workerSource), 'bsb_act lost wheel input')
+  assert.ok(/sentKeys/.test(workerSource) && /keyDelayMs/.test(toolsSource), 'key text mode lost its report or delay')
+  assert.ok(/FRAME_NOT_READABLE/.test(workerSource), 'bsb_read no longer fails loudly on a cross-origin frame')
+  assert.ok(/NOT_EDITABLE/.test(workerSource), 'type no longer refuses a non-editable target')
+  assert.ok(/installOnNewDocument/.test(toolsSource) && /addScriptToEvaluateOnNewDocument/.test(workerSource), 'bsb_eval lost document-start injection')
+  assert.ok(/const tracked = this\.activeBrowserId/.test(bridgeSource), 'browser resolution no longer prefers the tracked target')
+  console.log('ok  CaptchaWare-run guards pinned (wheel, key text, frames, type, injection, browser default)')
 
   // The skill and the tool surface are one model-facing contract.
   await import('./skill-align.mjs')

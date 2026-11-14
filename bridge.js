@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.1.270'
+export const VERSION = '1.1.271'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 export class BridgeError extends Error {
@@ -323,10 +323,18 @@ export class Bridge {
     if (typeof browser !== 'string' || browser.length === 0) {
       const live = [...this.#browsers.values()].filter((entry) => this.#isLive(entry))
       if (live.length > 1) {
-        const choices = live.map((entry) => `${entry.label || entry.id} (${entry.id})`).join(', ')
+        // A live tracked target wins over a fresh connection: the active browser
+        // is the one that last received work, so continuing there is what the
+        // caller already meant. Only ask for a choice when no target is active.
+        const tracked = this.activeBrowserId
+        if (tracked !== undefined && live.some((entry) => entry.id === tracked)) return tracked
+        const choices = live.map((entry) => {
+          const tab = entry.lastTabId === undefined ? '' : `, tab ${entry.lastTabId}`
+          return `${entry.label || entry.id} (${entry.id}${tab})`
+        }).join(', ')
         throw new BridgeError(
           'AMBIGUOUS_BROWSER',
-          `${live.length} browsers are connected: ${choices}. Ask the user which one to use, then pass browser with that id or label.`,
+          `${live.length} browsers are connected: ${choices}. None holds an active tracked tab; pass browser with an id.`,
         )
       }
       const active = this.activeBrowserId

@@ -28,6 +28,8 @@ let detachTimer
  * Accepting would be a guess; dismissing is the recoverable default.
  */
 const dialogs = new Map()
+/** Document-start scripts registered on the tab, keyed by tab id. */
+const injectedScripts = new Map()
 const netCaptures = new Map()
 const NET_BODY_CHARS = 4000
 const NET_HEADER_MAX = 24
@@ -386,6 +388,70 @@ async function uploadPage({ target, files, frame, tabId: hint }) {
   }
 }
 
+async function wheelPage({ x, y, deltaX, deltaY, modifiers, tabId: hint }) {
+  const tabId = await requirePage(hint)
+  const px = Number(x)
+  const py = Number(y)
+  if (!Number.isFinite(px) || !Number.isFinite(py)) throw fail('BAD_ARGUMENT', 'wheel needs numeric x and y')
+  const dx = Number(deltaX) || 0
+  const dy = Number(deltaY) || 0
+  if (dx === 0 && dy === 0) throw fail('BAD_ARGUMENT', 'wheel needs deltaX or deltaY')
+  const bits = { alt: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, command: 4, shift: 8 }
+  const mask = (Array.isArray(modifiers) ? modifiers : [])
+    .map((name) => bits[String(name).toLowerCase()])
+    .filter((bit) => typeof bit === 'number')
+    .reduce((all, bit) => all | bit, 0)
+  await send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: px, y: py, deltaX: dx, deltaY: dy, modifiers: mask })
+  const meta = await pageMeta(tabId)
+  return { url: meta?.url ?? '', title: meta?.title ?? '', at: { x: px, y: py }, deltaX: dx, deltaY: dy, modifiers: mask }
+}
+
+/** Register a script that runs before any page script in every new document. */
+async function evalInstall({ expression, tabId: hint }) {
+  const tabId = await requirePage(hint)
+  const source = String(expression ?? '')
+  if (!source.trim()) throw fail('BAD_ARGUMENT', 'installOnNewDocument needs an expression')
+  const added = await send(tabId, 'Page.addScriptToEvaluateOnNewDocument', { source })
+  const identifier = added?.identifier
+  if (!identifier) throw fail('CDP_ERROR', 'the script was not registered')
+  if (!injectedScripts.has(tabId)) injectedScripts.set(tabId, new Map())
+  injectedScripts.get(tabId).set(identifier, source)
+  const meta = await pageMeta(tabId)
+  return {
+    url: meta?.url ?? '',
+    title: meta?.title ?? '',
+    installed: true,
+    scriptId: identifier,
+    bytes: source.length,
+    note: 'runs before any page script in every new document of this tab, across reloads, until removed or the debugger detaches',
+  }
+}
+
+async function evalRemove({ id, tabId: hint }) {
+  const tabId = await requirePage(hint)
+  const identifier = String(id ?? '')
+  if (!identifier) throw fail('BAD_ARGUMENT', 'removeOnNewDocument needs the scriptId returned by the install call')
+  const stored = injectedScripts.get(tabId)
+  let removed = false
+  try {
+    await send(tabId, 'Page.removeScriptToEvaluateOnNewDocument', { identifier })
+    removed = true
+  } catch {
+    removed = false
+  }
+  const known = stored ? stored.delete(identifier) : false
+  const meta = await pageMeta(tabId)
+  return { url: meta?.url ?? '', title: meta?.title ?? '', removed: removed || known, scriptId: identifier }
+}
+
+async function evalList({ tabId: hint }) {
+  const tabId = await requirePage(hint)
+  const stored = injectedScripts.get(tabId)
+  const scripts = stored ? [...stored].map(([id, source]) => ({ id, bytes: source.length })) : []
+  const meta = await pageMeta(tabId)
+  return { url: meta?.url ?? '', title: meta?.title ?? '', count: scripts.length, scripts }
+}
+
 async function execute(method, params) {
   switch (method) {
     case 'open': return openPage(params)
@@ -398,6 +464,10 @@ async function execute(method, params) {
     case 'set': return setControl(params)
     case 'upload': return uploadPage(params)
     case 'key': return keyPage(params)
+    case 'wheel': return wheelPage(params)
+    case 'evalInstall': return evalInstall(params)
+    case 'evalRemove': return evalRemove(params)
+    case 'evalList': return evalList(params)
     case 'forceActive': return forcePage(params)
     case 'releaseActive': return releasePage(params)
     case 'drive': return drivePage(params)
@@ -496,6 +566,7 @@ async function attachTab(tabId, { recover = false } = {}) {
 
 function detach(tabId) {
   attached.delete(tabId)
+  injectedScripts.delete(tabId)
   return new Promise((resolve) => {
     chrome.debugger.detach({ tabId }, () => {
       void chrome.runtime.lastError
@@ -743,7 +814,7 @@ async function ensureLayout(tabId, { forceActive: wanted = false } = {}) {
   await delay(400)
   const after = await evaluate(tabId, '({ w: innerWidth, h: innerHeight })').catch(() => null)
   if (!after || !(Number(after.w) > 0) || !(Number(after.h) > 0)) {
-    throw fail('TAB_NOT_VISIBLE', 'the browser window is minimised; restore it so the page can be laid out — this plugin no longer raises windows')
+    throw fail('TAB_NOT_VISIBLE', 'the browser window is minimised; restore it so the page can be laid out. This plugin no longer raises windows.')
   }
   return { restored: false, view: after, forced }
 }
@@ -1076,15 +1147,32 @@ async function requirePage(hint) {
   return tab.id
 }
 
-async function readPage({ maxChars, maxElements, probe, tabId: hint }) {
+async function readPage({ maxChars, maxElements, probe, frame, tabId: hint }) {
   const tabId = await requirePage(hint)
-  const value = await evaluate(tabId, `(${snapshotPage.toString()})(${Number(maxChars) || 6000}, ${Number(maxElements) || 60})`)
+  let frameHit
+  let contextId
+  if (frame !== undefined && frame !== null && String(frame).trim() !== '') {
+    try {
+      const resolved = await frameContext(tabId, frame)
+      frameHit = resolved.frame
+      contextId = resolved.contextId
+    } catch (error) {
+      throw fail(
+        'FRAME_NOT_READABLE',
+        `bsb_read could not read frame ${JSON.stringify(String(frame))}: ${error?.message ?? 'the frame is not inspectable'}. A cross-origin frame cannot be read from the tab target; open it at its own URL or read the frame element instead.`,
+      )
+    }
+  }
+  const readIn = (source) => (contextId === undefined
+    ? evaluate(tabId, source)
+    : evaluateInContext(tabId, contextId, source))
+  const value = await readIn(`(${snapshotPage.toString()})(${Number(maxChars) || 6000}, ${Number(maxElements) || 60})`)
   if (!value || typeof value !== 'object') throw fail('CDP_ERROR', 'the page could not be read')
   const wanted = (Array.isArray(probe) ? probe : [])
     .filter((selector) => typeof selector === 'string' && selector.length > 0 && selector.length <= 400)
     .slice(0, 20)
   if (wanted.length > 0) {
-    value.probes = await evaluate(tabId, `(() => {
+    value.probes = await readIn(`(() => {
       const out = [];
       for (const selector of ${JSON.stringify(wanted)}) {
         const el = document.querySelector(selector);
@@ -1110,6 +1198,10 @@ async function readPage({ maxChars, maxElements, probe, tabId: hint }) {
   if (dialog) {
     value.dialog = dialog
     dialogs.delete(tabId)
+  }
+  if (frameHit) {
+    value.frameId = frameHit.frameId
+    if (frameHit.url) value.frameUrl = frameHit.url
   }
   return value
 }
@@ -1368,7 +1460,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
       'TARGET_OFFSCREEN',
       `${selector} exists but stayed outside the viewport after scrolling to it `
       + `(page scrollY ${Math.round(await evaluate(tabId, 'scrollY').catch(() => 0) || 0)}). `
-      + 'Something is pinning or clipping it — scroll the region yourself with bsb_act scroll, then retry.',
+      + 'Something is pinning or clipping it. Scroll the region yourself with bsb_act scroll, then retry.',
     )
   }
   // Ambiguity is a real trap on dense pages (a bare "button" hits the wrong one);
@@ -1448,6 +1540,15 @@ async function ensureTyped(tabId, selector, text, contextId) {
   return { value: forced ?? value, forced: true }
 }
 
+const editableInfoExpr = (selector) => `(() => {
+  const el = ${deepFindExpr(selector)};
+  if (!el) return null;
+  const tag = (el.tagName || '').toLowerCase();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  const textInput = tag === 'input' && !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(type);
+  return { tag, type, editable: textInput || tag === 'textarea' || el.isContentEditable === true };
+})()`
+
 async function typePage({ target, text, submit, frame, tabId: hint }) {
   const tabId = await requirePage(hint)
   await ensureLayout(tabId)
@@ -1461,6 +1562,11 @@ async function typePage({ target, text, submit, frame, tabId: hint }) {
       return true;
     })()`)
     if (!focused) throw fail('TARGET_NOT_FOUND', `no field matches ${selector} in frame ${hit.url || hit.frameId}`)
+    const info = await evaluateInContext(tabId, contextId, editableInfoExpr(selector))
+    if (!info) throw fail('TARGET_NOT_FOUND', `no field matches ${selector} in frame ${hit.url || hit.frameId}`)
+    if (!info.editable) {
+      throw fail('NOT_EDITABLE', `type cannot write into <${info.tag}${info.type ? ' type=' + info.type : ''}>: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
+    }
     await clearAndType(tabId, text)
     const frameTyped = await ensureTyped(tabId, selector, text, contextId)
     if (submit === true) {
@@ -1480,6 +1586,11 @@ async function typePage({ target, text, submit, frame, tabId: hint }) {
     return true;
   })()`)
   if (!focused) throw fail('TARGET_NOT_FOUND', `no field matches ${selector}`)
+  const info = await evaluate(tabId, editableInfoExpr(selector))
+  if (!info) throw fail('TARGET_NOT_FOUND', `no field matches ${selector}`)
+  if (!info.editable) {
+    throw fail('NOT_EDITABLE', `type cannot write into <${info.tag}${info.type ? ' type=' + info.type : ''}>: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
+  }
   // Insert as real input so every keystroke goes through the page's handlers.
   await clearAndType(tabId, text)
   const landed = await ensureTyped(tabId, selector, text)
@@ -1967,7 +2078,7 @@ const HIDDEN_HINT =
   "the tab is not visible (its window is minimized or another tab is in front), so the page's "
   + 'animation frames are paused; this input is queued and nothing will advance until it is shown'
 
-async function keyPage({ key, keys, steps, count, holdMs, target, modifiers, forceActive: forceWanted, measure, settle, tabId: hint }) {
+async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, target, modifiers, forceActive: forceWanted, measure, settle, tabId: hint }) {
   const tabId = await requirePage(hint)
   // forceActive:true is the escape hatch for a page whose frame clock has
   // stopped (a sleeping display leaves the tab "hidden" and rAF paused, so
@@ -1977,6 +2088,33 @@ async function keyPage({ key, keys, steps, count, holdMs, target, modifiers, for
   if (forceWanted) {
     const visibility = await evaluate(tabId, 'document.visibilityState').catch(() => null)
     if (visibility === 'hidden') forced = await forceActive(tabId)
+  }
+  // Text mode: one real key event per character. Canvas games read keydown and
+  // cannot be typed into by assigning value, so expanding a string into steps
+  // by hand costs one JSON object per character.
+  if (typeof text === 'string' && text.length > 0
+      && !key && !(Array.isArray(keys) && keys.length) && !(Array.isArray(steps) && steps.length)) {
+    if (target) {
+      const selector = resolveTarget(target)
+      const focused = await evaluate(tabId, `(() => { const el = ${deepFindExpr(selector)}; if (!el) return false; el.focus(); return true })()`)
+      if (!focused) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
+    }
+    const chars = Array.from(text).slice(0, 1000)
+    const gap = Math.min(Math.max(Number(keyDelayMs) || 40, 8), 500)
+    for (const ch of chars) {
+      const spec = keySpec(ch)
+      const name = spec?.key ?? ch
+      const base = {
+        key: name,
+        ...(spec?.code ? { code: spec.code } : {}),
+        ...(Number.isFinite(spec?.vk) ? { windowsVirtualKeyCode: spec.vk, nativeVirtualKeyCode: spec.vk } : {}),
+      }
+      await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...base, text: ch, unmodifiedText: ch })
+      await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+      await delay(gap)
+    }
+    const meta = await pageMeta(tabId)
+    return { url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length, modifiers: [] }
   }
   const specFor = (raw) => {
     const name = String(raw ?? '').trim()
@@ -3588,7 +3726,7 @@ async function recordPage(params = {}) {
   // instead of silently returning a one-frame strip.
   state.window = await windowInfo(state.tabId)
   state.warning = state.window && state.window.focused === false
-    ? 'the browser window is not focused, so capture frames may stall — pass focus:true to raise it'
+    ? 'the browser window is not focused, so capture frames may stall. Pass focus:true to raise it.'
     : undefined
   recorder = state
   if (mode === 'screencast') {
@@ -4921,7 +5059,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
         respond({
           ok: false,
           error: explicit
-            ? `no browser-bridge answered at ${explicit} — is that dsh instance still running?`
+            ? `no browser-bridge answered at ${explicit}. Is that dsh instance still running?`
             : `no browser-bridge answered on ${host}`,
         })
         return

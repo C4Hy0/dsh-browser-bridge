@@ -346,10 +346,13 @@ export function registerTools(ctx, bridge) {
       awaitPromise: { type: 'boolean', description: 'Await a returned promise. Required for promise-valued expressions; without it the call fails with PROMISE_RESULT instead of returning {}.' },
       frame: { type: 'string', description: 'Child frame: id/prefix, URL substring, or index.' },
       world: { type: 'string', enum: ['isolated', 'main'], description: '"isolated" (default, read-only) or "main" (page world, can read and write page state).' },
+      installOnNewDocument: { type: 'boolean', description: 'Register expression to run before any page script in every new document of the tab, across reloads, until removed or the debugger detaches. Returns scriptId.' },
+      removeOnNewDocument: { type: 'string', description: 'scriptId returned by an install call to remove.' },
+      listOnNewDocument: { type: 'boolean', description: 'List the document-start scripts installed for this tab.' },
       tabId: { type: 'number', description: 'Read a specific tab instead of the tracked one, so a second tab can be read while the first is driven.' },
       saveTo: { type: 'string', description: 'Write the result JSON to this path and return a short receipt. Large results spill to /tmp/bsb-eval-<stamp>.json automatically.' },
       browser: browserProperty,
-    }, ['expression']),    output: {
+    }, []),    output: {
       schema: { type: 'object', properties: { result: {}, world: { type: 'string' }, frameId: { type: 'string' }, url: { type: 'string' }, saved: { type: 'string' }, bytes: { type: 'number' }, preview: { type: 'string' } } },
       render: (_a, v) => (v?.saved
         ? [textBlock('eval result saved (' + v.bytes + ' bytes) → ' + v.saved + '\nopen it with read, or narrow the expression to get it inline.\npreview: ' + String(v.preview ?? '').slice(0, 400))]
@@ -358,12 +361,23 @@ export function registerTools(ctx, bridge) {
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
       const expression = stringArg(args, 'expression')
-      if (!expression) throw new Error('expression is required')
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
+      const browser = stringArg(args, 'browser')
+      if (args?.installOnNewDocument === true) {
+        if (!expression) throw new Error('installOnNewDocument needs expression')
+        return bridge.send('evalInstall', { expression, tabId }, { browser, timeoutMs: TIMEOUT_MS })
+      }
+      if (args?.removeOnNewDocument !== undefined && args?.removeOnNewDocument !== null && String(args.removeOnNewDocument) !== '') {
+        return bridge.send('evalRemove', { id: String(args.removeOnNewDocument), tabId }, { browser, timeoutMs: TIMEOUT_MS })
+      }
+      if (args?.listOnNewDocument === true) {
+        return bridge.send('evalList', { tabId }, { browser, timeoutMs: TIMEOUT_MS })
+      }
+      if (!expression) throw new Error('expression is required')
       const raw = await bridge.send(
         'eval',
         { expression, awaitPromise: args?.awaitPromise === true, frame: stringArg(args, 'frame'), world: stringArg(args, 'world'), tabId },
-        { browser: stringArg(args, 'browser'), timeoutMs: TIMEOUT_MS },
+        { browser, timeoutMs: TIMEOUT_MS },
       )
       // A DOM dump, a script body or a serialized framework state can be hundreds
       // of kilobytes. Returning that inline burns the whole context window for
@@ -925,17 +939,19 @@ export function registerTools(ctx, bridge) {
   register({
     name: 'bsb_act',
     description:
-      'Perform ONE input action. Use for every click, keystroke, drag, slider, scroll, file upload and canvas-game input. click: target|@eN|text|x,y (+count, all, targets, button). hover: target|text|x,y. type: target+text (+submit). set: target+value|checked (sliders, framework-bound inputs). select: target+value|label|index. key: key|keys+modifiers (+holdMs, steps for timed UIs, measure/settle for canvas state). drive: x,y in GAME coordinates or route[] - closed-loop steering of a canvas sprite. measure: read-only canvas sprite state. forceActive: opt-in wake of a hidden or paused page; hold with mode "hold" until releaseActive. scroll, drag (+path), drop, upload. x/y are viewport CSS px unless the action says game coordinates.',
+      'Perform ONE input action. Use for every click, keystroke, drag, slider, scroll, file upload and canvas-game input. click: target|@eN|text|x,y (+count, all, targets, button). hover: target|text|x,y. type: target+text (+submit). set: target+value|checked (sliders, framework-bound inputs). select: target+value|label|index. key: key|keys+modifiers (+holdMs, steps for timed UIs, measure/settle for canvas state). drive: x,y in GAME coordinates or route[] - closed-loop steering of a canvas sprite. measure: read-only canvas sprite state. forceActive: opt-in wake of a hidden or paused page; hold with mode "hold" until releaseActive. scroll, drag (+path), drop, upload, wheel (x,y + deltaX/deltaY). key accepts text to send each character as a real key event (+keyDelayMs). x/y are viewport CSS px unless the action says game coordinates.',
     parameters: input({
       action: {
         type: 'string',
-        enum: ['click', 'hover', 'type', 'set', 'select', 'key', 'drive', 'measure', 'scroll', 'drag', 'drop', 'upload', 'forceActive', 'releaseActive'],
+        enum: ['click', 'hover', 'type', 'set', 'select', 'key', 'drive', 'measure', 'scroll', 'drag', 'drop', 'upload', 'wheel', 'forceActive', 'releaseActive'],
         description: 'Which input action to perform.',
       },
       target: { type: 'string', description: '@eN from bsb_read, or a CSS selector.' },
       text: { type: 'string', description: 'Visible label (click/hover), or the text to type.' },
       x: { type: 'number', description: 'Viewport CSS x (game coordinate for drive).' },
       y: { type: 'number', description: 'Viewport CSS y (game coordinate for drive).' },
+      deltaX: { type: 'number', description: 'wheel: horizontal delta (about 100 per notch).' },
+      deltaY: { type: 'number', description: 'wheel: vertical delta (negative scrolls down).' },
       toTarget: { type: 'string', description: 'drag: drop target.' },
       toX: { type: 'number', description: 'drag: drop x.' },
       toY: { type: 'number', description: 'drag: drop y.' },
@@ -957,6 +973,7 @@ export function registerTools(ctx, bridge) {
       keys: { type: 'array', items: { type: 'string' }, description: 'key: keys held together.' },
       modifiers: { type: 'array', items: { type: 'string' }, description: 'key: Alt, Control, Meta, Shift.' },
       holdMs: { type: 'number', description: 'key/click/drag: hold time in ms, 0-10000. On click it keeps the button down (hold-to-mine); ignored for count>1.' },
+      keyDelayMs: { type: 'number', description: 'key with text: pause between characters in ms (default 40, 8-500).' },
       path: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'drag: [[x,y],…] press, glide, release (circles, signatures).' },
       instant: { type: 'boolean', description: 'drag path: stream moves without waiting (stroke timers).' },
       steps: {
@@ -1040,6 +1057,8 @@ export function registerTools(ctx, bridge) {
         const keys = Array.isArray(args?.keys) ? args.keys : undefined
         return send('key', {
           key: stringArg(args, 'key'),
+          text: stringArg(args, 'text'),
+          keyDelayMs: args?.keyDelayMs,
           keys,
           steps: args?.steps,
           count: args?.count,
@@ -1050,6 +1069,10 @@ export function registerTools(ctx, bridge) {
           target: stringArg(args, 'target'),
           modifiers: Array.isArray(args?.modifiers) ? args.modifiers : undefined,
         })
+      }
+      if (action === 'wheel') {
+        if (typeof args?.x !== 'number' || typeof args?.y !== 'number') throw new Error('wheel needs numeric x and y')
+        return send('wheel', { x: args.x, y: args.y, deltaX: args?.deltaX, deltaY: args?.deltaY, modifiers: Array.isArray(args?.modifiers) ? args.modifiers : undefined })
       }
       if (action === 'forceActive') return send('forceActive', { mode: args?.mode === 'hold' ? 'hold' : 'call' })
       if (action === 'releaseActive') return send('releaseActive', {})
@@ -1069,7 +1092,7 @@ export function registerTools(ctx, bridge) {
           keys: args?.keys && typeof args.keys === 'object' && !Array.isArray(args.keys) ? args.keys : undefined,
         })
       }
-      throw new Error('bsb_act needs action: click | hover | type | set | select | key | drive | scroll | drag | drop | upload')
+      throw new Error('bsb_act needs action: click | hover | type | set | select | key | drive | scroll | drag | drop | upload | wheel')
     },
   })
 
