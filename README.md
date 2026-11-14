@@ -1,4 +1,8 @@
-<h1 align="center"><img src="icon.svg" width="40" height="40" alt="" align="middle"> Browser Bridge</h1>
+<p align="center">
+  <img src="icon.svg" width="72" height="72" alt="Browser Bridge icon">
+</p>
+
+<h1 align="center">Browser Bridge</h1>
 
 A DeepSeek Harness plugin and a Chromium extension that let an agent drive the
 browser you are already signed into. The agent opens a tab, reads it, and acts on
@@ -12,13 +16,22 @@ port and serves the extension zip and a small dashboard on the plugin page.
 
 ## Screenshots
 
-The extension popup, paired and connected:
-
-![Browser Bridge extension popup](images/popup.png)
-
-The plugin page in DSH, showing the connected browsers and the extension download:
+The plugin page in DSH, showing connected browsers and the extension download:
 
 ![Browser Bridge plugin page](images/plugin-page.png)
+
+### Popup states
+
+The lamp and the word beside it carry the connection state. A failed pairing
+turns the Pair button red until the field changes.
+
+| State | Preview |
+| --- | --- |
+| Checking, before the first status read | <img src="images/popup-checking.png" width="320" alt="Popup checking state"> |
+| Not connected | <img src="images/popup-not-connected.png" width="320" alt="Popup not connected state"> |
+| Reconnecting, amber lamp | <img src="images/popup-reconnecting.png" width="320" alt="Popup reconnecting state"> |
+| Connected, green lamp | <img src="images/popup-connected.png" width="320" alt="Popup connected state"> |
+| Pairing failed, red button | <img src="images/popup-error.png" width="320" alt="Popup pairing error state"> |
 
 ## Requirements
 
