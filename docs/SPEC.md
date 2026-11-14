@@ -1,6 +1,6 @@
 # browser-bridge protocol and command reference
 
-This document describes host 1.1.272 and extension 1.0.263. Where it disagrees
+This document describes host 1.1.273 and extension 1.0.263. Where it disagrees
 with the code, the code wins: `extension/sw.js` holds the worker command table,
 `tools.js` the model-facing schemas, and `bridge.js` the HTTP routes.
 

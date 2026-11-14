@@ -12,10 +12,10 @@ import { readFile } from 'node:fs/promises'
 
 import { registerTools } from '../tools.js'
 
-const skill = await readFile(new URL('../skill/bsb-browser/SKILL.md', import.meta.url), 'utf8')
+const skill = await readFile(new URL('../skill/browser-bridge/SKILL.md', import.meta.url), 'utf8')
 const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(skill)
-assert.ok(frontmatter, 'bsb-browser skill has no frontmatter')
-assert.match(frontmatter[1], /^name: bsb-browser$/m, 'skill name must be bsb-browser')
+assert.ok(frontmatter, 'browser-bridge skill has no frontmatter')
+assert.match(frontmatter[1], /^name: browser-bridge$/m, 'skill name must be browser-bridge')
 assert.match(frontmatter[1], /^description: Use when .+$/m, 'skill description must say when to use it')
 
 const tools = new Map()
@@ -59,6 +59,6 @@ for (const [tool, parameter] of Object.entries(primary)) {
 for (const [name, definition] of tools) {
   assert.match(definition.description, /\bUse\b/, `${name} description has no use cue`)
 }
-assert.match(tools.get('bsb_browsers').description, /bsb-browser skill/, 'bsb_browsers must point at the skill')
+assert.match(tools.get('bsb_browsers').description, /browser-bridge skill/, 'bsb_browsers must point at the skill')
 
-console.log(`ok  the bsb-browser skill covers ${tools.size} tools and their routing enums`)
+console.log(`ok  the browser-bridge skill covers ${tools.size} tools and their routing enums`)

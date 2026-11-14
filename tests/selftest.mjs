@@ -339,7 +339,7 @@ try {
 
   // The friction ledger belongs to the maintainer workspace, not the public
   // plugin. Check it when present so both layouts pass.
-  if (existsSync(new URL('../docs/FRICTION.md', import.meta.url))) console.log('ok  friction ledger present')
+  if (existsSync(new URL('../friction/FRICTION.md', import.meta.url))) console.log('ok  friction ledger present')
 
   // Every @font-face URL must resolve to a file that actually ships, and every
   // family the CSS references must be declared. A stale font reference is silent:
@@ -808,18 +808,18 @@ try {
   console.log('ok  rect captures validate bounds and report their scale')
 
   // The playbook must ship inside the plugin: installing the bundle registers
-  // `bsb-browser` into the skill catalog, with no project skill file to copy.
-  const skillUrl = new URL('../skill/bsb-browser/SKILL.md', import.meta.url)
-  assert.ok(existsSync(skillUrl), 'bundled bsb-browser skill is missing')
+  // `browser-bridge` into the skill catalog, with no project skill file to copy.
+  const skillUrl = new URL('../skill/browser-bridge/SKILL.md', import.meta.url)
+  assert.ok(existsSync(skillUrl), 'bundled browser-bridge skill is missing')
   const skillText = await readFile(skillUrl, 'utf8')
-  assert.match(skillText, /^---\r?\n[\s\S]*?name: bsb-browser/, 'bundled skill has no bsb-browser frontmatter')
+  assert.match(skillText, /^---\r?\n[\s\S]*?name: browser-bridge/, 'bundled skill has no browser-bridge frontmatter')
   const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8')
-  assert.ok(/readBundledSkill\(join\(here, 'skill', 'bsb-browser', 'SKILL\.md'\)\)/.test(indexSource), 'plugin does not load the bundled skill')
+  assert.ok(/readBundledSkill\(join\(here, 'skill', 'browser-bridge', 'SKILL\.md'\)\)/.test(indexSource), 'plugin does not load the bundled skill')
   assert.ok(/ctx\.inject\(\['skills'\]/.test(indexSource), 'plugin does not wait for the skill service')
   assert.ok(/skills\.register\(\{/.test(indexSource), 'plugin does not register the bundled skill')
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   assert.ok(packageJson.files.includes('skill/**'), 'package files omit the bundled skill')
-  console.log('ok  the bsb-browser skill ships in the plugin and registers at load')
+  console.log('ok  the browser-bridge skill ships in the plugin and registers at load')
 
   // The dev fixtures live under tests/ and the host serves them from there.
   // A move back to the plugin root would break every dev/e2e route silently.

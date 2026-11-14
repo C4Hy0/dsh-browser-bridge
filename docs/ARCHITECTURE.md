@@ -28,7 +28,7 @@ agent tool call
    packs the extension zip on download, and reports the running build. The
    adapter wraps Fetch-style resources as Node handlers, which is the shape
    every DSH webserver release dispatches.
-5. Skill (`skill/bsb-browser/SKILL.md`). Registered into the skill catalog when
+5. Skill (`skill/browser-bridge/SKILL.md`). Registered into the skill catalog when
    the plugin loads. `tests/skill-align.mjs` fails when the tools and the skill
    drift apart.
 6. Tests. `tests/selftest.mjs` covers transport, routing, guards and packaging;

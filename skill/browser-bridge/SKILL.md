@@ -1,5 +1,5 @@
 ---
-name: bsb-browser
+name: browser-bridge
 description: Use when a task needs a real browser — open or adopt pages, click/type/scrape rendered content, solve CAPTCHAs, play canvas or WebGL games, take screenshots/recordings, inspect iframes, or debug a page's network/console. The bsb_* toolset's workflows, tool choices, and failure recovery.
 ---
 
