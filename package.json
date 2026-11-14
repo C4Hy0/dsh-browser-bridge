@@ -37,5 +37,27 @@
       "platform": "web",
       "immediately": true
     }
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Jidaron"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jidaron/dsh-browser-bridge.git"
+  },
+  "homepage": "https://github.com/Jidaron/dsh-browser-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/Jidaron/dsh-browser-bridge/issues"
+  },
+  "keywords": [
+    "browser-automation",
+    "chrome-extension",
+    "devtools-protocol",
+    "dsh-plugin",
+    "ai-agents"
+  ],
+  "scripts": {
+    "test": "node tests/selftest.mjs && node tests/compat-webserver.mjs"
   }
 }

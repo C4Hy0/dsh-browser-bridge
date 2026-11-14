@@ -245,3 +245,7 @@ tests/            selftest, e2e, webserver compatibility, fixtures
   `chrome.debugger`.
 - Unpacked install only. Chrome rejects off-store `.crx` files with
   `CRX_REQUIRED_PROOF_MISSING`, so the plugin does not produce one.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
