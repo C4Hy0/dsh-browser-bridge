@@ -11,6 +11,10 @@
 const WAIT_MS = 20000
 const KEEPALIVE_ALARM = 'browser-bridge-keepalive'
 const DETACH_IDLE_MS = 5 * 60 * 1000
+/** How long a triggered file chooser may take to reach `Page.fileChooserOpened`. */
+const FILE_CHOOSER_WAIT_MS = 5000
+/** Paste inserts one run of text; this cap is far above key text mode's 1000 keys. */
+const PASTE_MAX_CHARS = 100000
 
 import { discoverEndpoints } from './discovery.js'
 import { whoami } from './identity.js'
@@ -343,48 +347,187 @@ async function runCommand(command) {
  *
  * Chrome opens the paths itself, so they must be paths the browser machine can
  * see (a Windows path when Chrome runs on Windows), not WSL paths.
+ *
+ * Three routes, strongest first:
+ * - a selector that already IS the file input in the top document: set it
+ *   directly (no click, so it works on a hidden tab);
+ * - `frame`: the same direct set inside a frame whose document the tab can
+ *   reach (same-origin or same-process);
+ * - otherwise a real press at `x,y` (or on a top-document trigger) with
+ *   `Page.setInterceptFileChooserDialog` armed, then `DOM.setFileInputFiles`
+ *   with the `backendNodeId` the chooser event reports. This needs no script
+ *   access to the frame document, which is what makes a cross-origin picker
+ *   reachable at all.
  */
-async function uploadPage({ target, files, frame, tabId: hint }) {
+async function uploadPage({ target, files, frame, x, y, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
-  if (!target) throw fail('BAD_ARGUMENT', 'upload needs a target selector')
   const list = Array.isArray(files)
     ? files.filter((f) => typeof f === 'string' && f.trim()).map((f) => f.trim())
     : []
   if (!list.length) throw fail('BAD_ARGUMENT', 'upload needs at least one file path')
-  const selector = resolveTarget(target)
+  const hasPoint = Number.isFinite(Number(x)) && Number.isFinite(Number(y))
+  if (!target && !frame && !hasPoint) {
+    throw fail('BAD_ARGUMENT', 'upload needs a target selector, a frame, or x and y that open the file chooser')
+  }
+  const names = list.map((f) => f.split(/[\\/]/).pop())
   await send(tabId, 'DOM.enable').catch(() => undefined)
-  let rootNodeId
-  let frameId
-  if (frame) {
+  if (frame && (target || !hasPoint)) {
     const hit = resolveFrameArg(await frameList(tabId), frame)
     if (!hit) throw fail('FRAME_NOT_FOUND', `no child frame matches ${frame}`)
+    if (!target) throw fail('BAD_ARGUMENT', 'upload with frame needs a target selector inside that frame, or x and y instead')
     const owner = await send(tabId, 'DOM.getFrameOwner', { frameId: hit.frameId })
     const described = await send(tabId, 'DOM.describeNode', { backendNodeId: owner?.backendNodeId })
-    rootNodeId = described?.node?.contentDocument?.nodeId
-    if (!rootNodeId) throw fail('FRAME_NOT_FOUND', 'the frame document is not reachable from the tab')
-    frameId = hit.frameId
-  } else {
+    const rootNodeId = described?.node?.contentDocument?.nodeId
+    if (!rootNodeId) {
+      // The ticket that asked for the chooser route hit this exact wall: the
+      // frame's document is not part of the tab's DOM tree, so no selector can
+      // resolve inside it. The chooser route never reads that document.
+      throw fail(
+        'FRAME_NOT_FOUND',
+        `the frame document is not reachable from the tab (cross-origin or out-of-process): ${hit.url || hit.frameId}. `
+        + 'Upload through the file chooser instead: call upload again without frame, with x,y over the control that opens the chooser, '
+        + 'or with a top-document target (a button, label, or the iframe element) that opens it.',
+      )
+    }
+    const selector = resolveTarget(target)
+    const found = await send(tabId, 'DOM.querySelector', { nodeId: rootNodeId, selector })
+    if (!found?.nodeId) throw fail('TARGET_NOT_FOUND', `no element matches ${selector} in frame ${hit.url || hit.frameId}`)
+    const node = (await send(tabId, 'DOM.describeNode', { nodeId: found.nodeId }))?.node ?? {}
+    if (!isFileInputNode(node)) {
+      throw fail(
+        'NOT_A_FILE_INPUT',
+        `${selector} is not an <input type="file">. If it is a control that opens the chooser, call upload without frame using x,y or a top-document target.`,
+      )
+    }
+    await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
+    await delay(150)
+    const meta = await pageMeta(tabId)
+    return { url: meta?.url ?? '', title: meta?.title ?? '', count: list.length, files: names, via: 'frame', nodeId: found.nodeId, frameId: hit.frameId }
+  }
+  // A target that is itself the file input needs no press: this keeps the old
+  // top-document path, including its behavior on a hidden tab.
+  if (target) {
+    const selector = resolveTarget(target)
     const root = await send(tabId, 'DOM.getDocument', { depth: 0, pierce: false })
-    rootNodeId = root.root.nodeId
+    const found = await send(tabId, 'DOM.querySelector', { nodeId: root.root.nodeId, selector })
+    if (found?.nodeId) {
+      const node = (await send(tabId, 'DOM.describeNode', { nodeId: found.nodeId }))?.node ?? {}
+      if (isFileInputNode(node)) {
+        await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
+        await delay(150)
+        const meta = await pageMeta(tabId)
+        return { url: meta?.url ?? '', title: meta?.title ?? '', count: list.length, files: names, via: 'input', nodeId: found.nodeId }
+      }
+    }
   }
-  const found = await send(tabId, 'DOM.querySelector', { nodeId: rootNodeId, selector })
-  if (!found?.nodeId) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
-  const describedNode = await send(tabId, 'DOM.describeNode', { nodeId: found.nodeId })
-  const node = describedNode?.node ?? {}
+  // The chooser-interception route crashed the fixture renderer twice on live
+  // tests (a modal native chooser plus the debugger session). It is withdrawn
+  // until it can be validated without a renderer crash. A top-document input or
+  // a reachable frame input still works; nothing is pressed here.
+  throw fail(
+    'UNSUPPORTED',
+    'cross-origin file-chooser upload is disabled in this build: the interception route crashed the renderer on live tests. '
+    + 'Set files on a top-document <input type="file"> with target, or on a reachable frame input. Nothing was pressed.',
+  )
+}
+
+/** The attributes of a `DOM.describeNode` node as a plain map (CDP sends name/value pairs). */
+function nodeAttrs(node) {
   const attrs = {}
-  for (let i = 0; i + 1 < (node.attributes?.length ?? 0); i += 2) attrs[node.attributes[i]] = node.attributes[i + 1]
-  if (node.nodeName !== 'INPUT' || String(attrs.type ?? '').toLowerCase() !== 'file') {
-    throw fail('NOT_A_FILE_INPUT', `${selector} is not an <input type="file">`)
+  const list = node?.attributes ?? []
+  for (let i = 0; i + 1 < list.length; i += 2) attrs[list[i]] = list[i + 1]
+  return attrs
+}
+
+/** True when a `DOM.describeNode` node is an `<input type="file">`. */
+function isFileInputNode(node) {
+  return node?.nodeName === 'INPUT' && String(nodeAttrs(node).type ?? '').toLowerCase() === 'file'
+}
+
+/**
+ * Set files on a file input through the browser's own chooser.
+ *
+ * The press is real input at a viewport point, so the tab must be visible. The
+ * interception is armed for this command only: leaving it on would swallow
+ * every later chooser on the tab. The returned `backendNodeId` comes from
+ * Chrome, so no selector is resolved inside the (possibly cross-origin) frame
+ * document.
+ */
+async function fileChooserUpload(tabId, { list, names, target, x, y, forceWanted }) {
+  const { visibility, forced } = await requireInputVisibility(tabId, 'upload', forceWanted)
+  let point
+  if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
+    point = { x: Number(x), y: Number(y) }
+  } else if (target) {
+    const selector = resolveTarget(target)
+    const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
+    if (!box) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
+    if (box.offscreen) {
+      throw fail('TARGET_OFFSCREEN', `${selector} stays outside the viewport after scrolling to it, so the press that opens the file chooser cannot land. Scroll it into view or pass x,y.`)
+    }
+    point = { x: box.x, y: box.y }
+  } else {
+    throw fail('BAD_ARGUMENT', 'upload needs x and y, or a top-document target, to open the file chooser')
   }
-  await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
-  await delay(150)
-  const meta = await pageMeta(tabId)
-  return {
-    url: meta?.url ?? '',
-    title: meta?.title ?? '',
-    count: list.length,
-    files: list.map((f) => f.split(/[\\/]/).pop()),
-    ...(frameId ? { frameId } : {}),
+  // An explicit x,y outside the layout viewport used to reach pressAt and crash
+  // the renderer on a hidden tab. Refuse it before any input is dispatched: a
+  // press outside the viewport cannot open a chooser anyway.
+  const viewport = await evaluate(tabId, '({ width: window.innerWidth, height: window.innerHeight })').catch(() => null)
+  if (viewport && (point.x < 0 || point.y < 0 || point.x >= viewport.width || point.y >= viewport.height)) {
+    throw fail(
+      'TARGET_OFFSCREEN',
+      `the press point (${Math.round(point.x)},${Math.round(point.y)}) is outside the ${Math.round(viewport.width)}x${Math.round(viewport.height)} viewport, so no file chooser can open there. `
+      + 'Scroll the control into view with bsb_act scroll, or pass in-view x,y. Nothing was pressed.',
+    )
+  }
+  const opened = waitEvent(tabId, 'Page.fileChooserOpened', FILE_CHOOSER_WAIT_MS)
+  // The event may never arrive (a press that opens nothing). Mark the promise
+  // handled so a failure before the await cannot surface as an unhandled rejection.
+  opened.catch(() => undefined)
+  let handled = false
+  try {
+    try {
+      await send(tabId, 'Page.setInterceptFileChooserDialog', { enabled: true })
+    } catch (error) {
+      throw fail('FILE_CHOOSER_UNSUPPORTED', `this browser cannot intercept a file chooser (${error?.message ?? error}); pass a top-document <input type="file"> selector instead.`)
+    }
+    await pressAt(tabId, point, 1, 'left')
+    let event
+    try {
+      event = await opened
+    } catch {
+      throw fail(
+        'FILE_CHOOSER_NOT_OPENED',
+        `no file chooser opened after pressing (${Math.round(point.x)},${Math.round(point.y)}). The press must land on an <input type="file">, its label, or a control that opens one. `
+        + 'If the input lives in a cross-origin iframe, press the control itself with x,y: a frame that runs in another process cannot be intercepted from the tab.',
+      )
+    }
+    if (!event?.backendNodeId) {
+      throw fail(
+        'FILE_INPUT_NOT_FOUND',
+        'the file chooser opened but Chrome did not report an input node (only an <input type="file"> reports one; showOpenFilePicker() does not), so the files cannot be attached.',
+      )
+    }
+    await send(tabId, 'DOM.setFileInputFiles', { backendNodeId: event.backendNodeId, files: list })
+    handled = true
+    await delay(200)
+    const meta = await pageMeta(tabId)
+    return {
+      url: meta?.url ?? '',
+      title: meta?.title ?? '',
+      count: list.length,
+      files: names,
+      via: 'fileChooser',
+      backendNodeId: event.backendNodeId,
+      ...(event.frameId ? { frameId: event.frameId } : {}),
+      ...inputSuccess(visibility, forced),
+    }
+  } finally {
+    // Disable interception even when the press opened nothing. `cancel` releases
+    // a chooser that is still pending because it reported no input node.
+    await send(tabId, 'Page.setInterceptFileChooserDialog', handled ? { enabled: false } : { enabled: false, cancel: true })
+      .catch(() => send(tabId, 'Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => undefined))
+    if (forced) await clearForced(tabId, forced)
   }
 }
 
@@ -490,6 +633,7 @@ async function execute(method, params) {
     case 'waitFor': return waitForPage(params)
     case 'scroll': return scrollPage(params)
     case 'type': return typePage(params)
+    case 'paste': return pastePage(params)
     case 'screenshot': return screenshotPage(params)
     case 'record': return recordPage(params)
     case 'close': return closePage()
@@ -500,6 +644,7 @@ async function execute(method, params) {
     case 'frames': return framesPage(params)
     case 'network': return networkPage(params)
     case 'inspect': return inspectPage(params)
+    case 'feed': return feedPage(params)
     case 'pixels': return pixelsPage(params)
     case 'sheet': return sheetPage(params)
     case 'console': return consolePage(params)
@@ -928,12 +1073,52 @@ function stateSummary(state) {
 }
 
 /**
+ * Whether a `pageState` sample describes a healthy, committed document.
+ *
+ * A cached navigation outcome names the last navigation this worker drove; it
+ * does not describe the document that is in the tab now. Before a failure is
+ * reported, the current document has to be able to contradict it: Chrome's
+ * error document, a 4xx/5xx status, or a page that has not finished parsing.
+ * A complete 2xx/3xx document is healthy even when its URL is not the one that
+ * was requested (a redirect target, or a tab that recovered to another page).
+ */
+function documentIsHealthy(state, requestedUrl) {
+  if (!state || typeof state !== 'object') return false
+  const documentUrl = String(state.url ?? '')
+  if (state.failedDocument === true || /^chrome-error:/i.test(documentUrl)) return false
+  if (String(state.readyState ?? '') !== 'complete') return false
+  const status = Number(state.httpStatus) || 0
+  if (status < 200 || status >= 400) return false
+  const asked = String(requestedUrl ?? '')
+  if (!asked || asked === documentUrl) return true
+  // A different URL is still a normal page when it painted real content; a tab
+  // that never committed the requested document is what the failure hint is
+  // for, and only the reply's own state block can tell the two apart.
+  return (Number(state.bodyTextLen) || 0) > 0
+}
+
+/** Whether the CURRENT document (not a cached outcome) looks like a failed one. */
+function documentIsFailed(state) {
+  if (!state || typeof state !== 'object') return false
+  if (state.failedDocument === true) return true
+  if (/^chrome-error:/i.test(String(state.url ?? ''))) return true
+  return Number(state.httpStatus) >= 400
+}
+
+/**
  * One sentence naming why a document is not the page the caller asked for.
  *
  * Chrome has three quiet failure shapes: a committed error document, a 200
  * interstitial or empty shell, and a full-page splash whose app never booted.
  * Each looks like a finished load, so this hint is the only place the
  * difference is visible without a follow-up read or eval.
+ *
+ * Two guards keep the hint about the document in front of the caller:
+ * a cached navigation error is never reported against a healthy document (the
+ * stale-hint loop from BSB-20261115-2112), and no content verdict is asserted
+ * before `readyState` is complete, when 0 chars and 0 elements are simply the
+ * pre-parse state rather than evidence of an interstitial
+ * (BSB-20261115-2205).
  */
 function documentHint(state, { requestedUrl, navigationError } = {}) {
   if (!state || typeof state !== 'object') return undefined
@@ -949,7 +1134,21 @@ function documentHint(state, { requestedUrl, navigationError } = {}) {
   if (error) {
     // The navigation named a failure but committed no error document (for
     // example ERR_ABORTED): the tab still shows whatever was there before.
+    // When that document is healthy, the failure is an older navigation this
+    // tab has since recovered from, and the reply's own state line would
+    // contradict the hint. Clear the stale wording instead of contradicting.
+    if (documentIsHealthy(state, requestedUrl)) return undefined
     return 'navigation failed: ' + error + '. The tab did not commit the requested document' + (documentUrl ? ' (it still shows ' + documentUrl + ')' : '') + '; call bsb_open with the URL again to retry.'
+  }
+  // A content verdict needs a finished document. Before `readyState` is
+  // complete the body may not exist yet, so 0 chars and 0 elements are the
+  // normal pre-parse state, not evidence of an interstitial.
+  const readyState = String(state.readyState ?? '')
+  if (readyState !== 'complete') {
+    if (readyState === 'loading' || readyState === 'interactive') {
+      return 'document still loading (readyState ' + readyState + '); no content verdict yet. Read it again when it finishes loading.'
+    }
+    return undefined
   }
   const title = String(state.title ?? '')
   const textLen = Number(state.bodyTextLen) || 0
@@ -1272,14 +1471,18 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * returns the reason (`errorText`) in the reply and this worker is the only
  * place that sees it, so keep it per tab: bsb_tabs, bsb_wait_for and bsb_read
  * can then report the failure instead of reading an opaque error page.
+ *
+ * The record is the LAST navigation, not a history: each write replaces the
+ * whole per-tab outcome. Merging used to carry an old `navigationError` forward
+ * into a later successful navigation, so one 429 made every subsequent
+ * bsb_read in that tab claim the page had failed (BSB-20261115-2112).
  */
 const navOutcomes = new Map()
 const NAV_OUTCOME_MAX = 32
 
 function rememberNav(tabId, outcome) {
   if (typeof tabId !== 'number') return
-  const previous = navOutcomes.get(tabId) ?? {}
-  navOutcomes.set(tabId, { ...previous, ...outcome })
+  navOutcomes.set(tabId, { ...(outcome ?? {}) })
   while (navOutcomes.size > NAV_OUTCOME_MAX) {
     const oldest = navOutcomes.keys().next().value
     navOutcomes.delete(oldest)
@@ -1545,10 +1748,22 @@ async function readPage({ maxChars, maxElements, probe, frame, normalize, tabId:
   const state = await pageState(tabId).catch(() => null)
   if (state) {
     value.state = stateSummary(state)
-    const outcome = navOutcome(tabId)
+    let outcome = navOutcome(tabId)
+    // The cached outcome describes the last navigation this worker drove, not
+    // the document that is in the tab now. A later navigation in the same tab
+    // (or a manual reload) can commit a healthy page; the old error must be
+    // cleared, never merged forward into this read (BSB-20261115-2112).
+    if (outcome?.navigationError && documentIsHealthy(state, outcome.requestedUrl)) {
+      rememberNav(tabId, { ...outcome, navigationError: '' })
+      outcome = navOutcome(tabId)
+    }
+    // A cached navigation error may only be passed on when the CURRENT document
+    // is actually a failed one; otherwise the hint would contradict the state
+    // line in the same reply.
+    const currentFailed = documentIsFailed(state)
     const hint = documentHint(state, {
       requestedUrl: outcome?.requestedUrl,
-      navigationError: outcome?.navigationError,
+      navigationError: currentFailed ? outcome?.navigationError : undefined,
     })
     if (hint) value.hint = hint
   }
@@ -1618,8 +1833,114 @@ async function findTextPoint(tabId, text) {
     }
     return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: best.text, scrolled, matches: out.length };
   })()`)
-  if (!found) throw fail('TARGET_NOT_FOUND', `no visible element contains the text ${JSON.stringify(wanted)}`)
+  if (!found) throw textNotClickable(await evaluate(tabId, textCandidatesExpr(wanted)).catch(() => null), wanted)
   return found
+}
+
+/**
+ * Collect the nodes that DO contain the text when no hittable hit was found.
+ *
+ * `bsb_read` extracts text that the click hit-test cannot press: a node can be
+ * zero-height while its text is painted, sit under `pointer-events:none`, or be
+ * inside an `aria-hidden` overlay. Reporting "no visible element contains the
+ * text" for a string the caller just read contradicts the read, so the failure
+ * names the candidates and their geometry instead.
+ */
+const textCandidatesExpr = (wanted) => `(() => {
+  const want = ${JSON.stringify(String(wanted ?? ''))}.toLowerCase();
+  const skip = new Set(['HTML', 'BODY', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'META', 'LINK', 'TITLE']);
+  const pathOf = (el) => {
+    const parts = [];
+    let node = el;
+    let host = null;
+    for (let depth = 0; node && node.nodeType === 1 && depth < 6; depth += 1) {
+      const tag = (node.tagName || '').toLowerCase();
+      const id = node.id && /^[A-Za-z][\\w-]*$/.test(node.id) ? '#' + node.id : '';
+      let part = id ? tag + id : tag;
+      if (!id && node.parentElement) {
+        const same = [...node.parentElement.children].filter((child) => child.tagName === node.tagName);
+        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+      }
+      parts.unshift(part);
+      if (id) break;
+      if (!node.parentElement) {
+        const root = node.getRootNode && node.getRootNode();
+        host = root && root.host ? root.host : null;
+        break;
+      }
+      node = node.parentElement;
+    }
+    return { path: parts.join(' > '), host };
+  };
+  const selectorOf = (el) => {
+    const own = pathOf(el);
+    if (!own.host) return own.path;
+    const parent = selectorOf(own.host);
+    return parent + ' >> ' + own.path;
+  };
+  const ariaHidden = (el) => {
+    for (let node = el; node;) {
+      if (node.nodeType === 1 && node.getAttribute && node.getAttribute('aria-hidden') === 'true') return true;
+      if (node.parentElement) { node = node.parentElement; continue; }
+      const root = node.getRootNode && node.getRootNode();
+      node = root && root.host ? root.host : null;
+    }
+    return false;
+  };
+  const nodes = [];
+  const collect = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (nodes.length >= 12000) return;
+      nodes.push(el);
+      if (el.shadowRoot) collect(el.shadowRoot);
+    }
+  };
+  collect(document);
+  const found = [];
+  let matched = 0;
+  for (const el of nodes) {
+    if (skip.has(el.tagName)) continue;
+    const label = el.getAttribute ? String(el.getAttribute('aria-label') || '') : '';
+    const title = el.getAttribute ? String(el.getAttribute('title') || '') : '';
+    const hay = String(el.textContent || '') + ' ' + label + ' ' + title + ' ' + (el.value == null ? '' : String(el.value));
+    if (hay.toLowerCase().indexOf(want) === -1) continue;
+    matched += 1;
+    const r = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    const hidden = ariaHidden(el);
+    const box = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+    const pointerEvents = style.pointerEvents || 'auto';
+    found.push({
+      selector: selectorOf(el),
+      tag: (el.tagName || '').toLowerCase(),
+      box,
+      visible: box.width >= 2 && box.height >= 2 && style.display !== 'none' && style.visibility !== 'hidden' && pointerEvents !== 'none' && !hidden,
+      pointerEvents,
+      ariaHidden: hidden,
+      ownText: [...el.childNodes].some((child) => child.nodeType === 3 && String(child.textContent || '').toLowerCase().indexOf(want) !== -1),
+      area: box.width * box.height,
+    });
+  }
+  // The node that holds the text itself explains the miss better than a huge
+  // ancestor that merely contains it, so own text wins, then the smallest box.
+  found.sort((a, b) => (b.ownText - a.ownText) || (a.area - b.area));
+  return { matched, candidates: found.slice(0, 5).map(({ ownText, area, ...rest }) => rest) };
+})()`
+
+/** Build the typed failure for a text click that found no hittable node. */
+function textNotClickable(report, wanted) {
+  const candidates = Array.isArray(report?.candidates) ? report.candidates.slice(0, 5) : []
+  const reason = candidates.length
+    ? `the text is present in ${Number(report?.matched) || candidates.length} node(s) but none is hittable (zero-size, aria-hidden or pointer-events:none)`
+    : 'no node text contains the string, even hidden or zero-size ones, so the page may have re-rendered since the read'
+  const hint = candidates.length
+    ? 'click a coordinate inside a candidate box with bsb_act click x,y, or click the nearest clickable ancestor selector. A selector that crosses a shadow boundary is written host >> inner.'
+    : 're-read the page with bsb_read to confirm the text is still there, then click by @eN, selector or coordinates.'
+  return fail(
+    'TEXT_NOT_CLICKABLE',
+    `click text ${JSON.stringify(wanted)} found no hittable element. reason: ${reason}. `
+    + `candidates: ${JSON.stringify(candidates)}. hint: ${hint}`,
+  )
 }
 
 // A human tapping the same control several times is one gesture; repeating the
@@ -1706,15 +2027,69 @@ async function followMapArea(tabId, x, y, beforeUrl, afterUrl) {
   return target
 }
 
-async function clickPage({ target, text, x, y, frame, count, targets, all, button, holdMs, forceActive: forceWanted, tabId: hint }) {
+/**
+ * A cheap fingerprint of what the page looks like right now.
+ *
+ * A menu item, a grid cell or a custom control can absorb a press and change
+ * nothing, and the old reply still looked like a success. Five read-only values
+ * are enough to tell "something happened" from "nothing did", and none of them
+ * costs a DOM write or a poll loop.
+ */
+const PAGE_FINGERPRINT_EXPR = `(() => {
+  let active = document.activeElement;
+  while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+  const part = (el) => el ? [String(el.tagName || '').toLowerCase(), el.id || '',
+    el.getAttribute ? String(el.getAttribute('role') || '') : '',
+    el.getAttribute ? String(el.getAttribute('aria-label') || '') : ''].join('|') : '';
+  const body = document.body;
+  return {
+    url: location.href,
+    title: document.title,
+    elementCount: document.getElementsByTagName('*').length,
+    textLen: body ? String(typeof body.innerText === 'string' ? body.innerText : body.textContent || '').length : 0,
+    active: part(active),
+  };
+})()`
+
+const pageFingerprint = (tabId) => evaluate(tabId, PAGE_FINGERPRINT_EXPR).catch(() => null)
+
+/** Did anything in the fingerprint move? null when either snapshot is missing. */
+const fingerprintChanged = (before, after) => {
+  if (!before || !after) return null
+  return before.url !== after.url
+    || before.title !== after.title
+    || before.elementCount !== after.elementCount
+    || before.textLen !== after.textLen
+    || before.active !== after.active
+}
+
+const CLICK_UNCHANGED_HINT =
+  'click verify:true found no page change: the URL, title, element count, body text length and focused element are all identical. '
+  + 'A menu item or grid cell that changed nothing may not have received the press: check for an overlay or a hover-only control, '
+  + 'wait for the menu to settle with bsb_wait_for, then press again with fresh coordinates. Do not assume the click applied.'
+
+async function clickPage({ target, text, x, y, frame, count, targets, all, button, holdMs, verify, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
   // Refuse before measuring or dispatching: input into a hidden page is held by
   // the browser and replayed later, which is worse than an error.
   const { visibility, forced } = await requireInputVisibility(tabId, 'click', forceWanted)
   const layout = await ensureLayout(tabId)
-  const finish = async (reply) => {
+  // verify:true is opt-in. The fingerprint is read before the press and again
+  // after the existing settle delay; there is no extra wait and no DOM write.
+  const wantsVerify = verify === true
+  const snapshotBefore = async () => (wantsVerify ? pageFingerprint(tabId) : undefined)
+  const finish = async (reply, beforePrint) => {
+    let merged = reply
+    if (wantsVerify) {
+      const afterPrint = await pageFingerprint(tabId)
+      const changed = fingerprintChanged(beforePrint, afterPrint)
+      if (changed !== null) {
+        merged = { ...reply, pageChanged: changed }
+        if (!changed) merged.hint = CLICK_UNCHANGED_HINT
+      }
+    }
     if (forced) await clearForced(tabId, forced)
-    return { ...reply, ...inputSuccess(visibility, forced) }
+    return { ...merged, ...inputSuccess(visibility, forced) }
   }
   // Batch mode: a grid of tiles needs dozens of presses; one call keeps the
   // sequence tight and lets a single "select all these" request stay human-paced.
@@ -1732,6 +2107,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
       picks.push({ selector: resolveTarget(item) })
     }
     if (!picks.length) throw fail('TARGET_NOT_FOUND', 'targets resolved to no clickable points')
+    const beforePrint = await snapshotBefore()
     const clicked = []
     for (const pick of picks) {
       let point = pick
@@ -1746,19 +2122,20 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     }
     await delay(200)
     const batchMeta = await pageMeta(tabId)
-    return finish({ url: batchMeta?.url ?? '', title: batchMeta?.title ?? '', clicked, clicks: clicked.length, windowRestored: layout.restored, dialog: recentDialog(tabId) })
+    return finish({ url: batchMeta?.url ?? '', title: batchMeta?.title ?? '', clicked, clicks: clicked.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
   }
   // Coordinate clicks: many widgets (canvas maps, custom controls) expose no
   // usable selector, but the agent can still see where to press.
   if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
     const px = Number(x), py = Number(y)
     const before = await pageMeta(tabId)
+    const beforePrint = await snapshotBefore()
     const taps = await pressAt(tabId, { x: px, y: py }, count, button, holdMs)
     await delay(150)
     let meta = await pageMeta(tabId)
     const followed = await followMapArea(tabId, px, py, before?.url, meta?.url)
     if (followed) meta = (await pageMeta(tabId)) ?? meta
-    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId), followed })
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId), followed }, beforePrint)
   }
   // Frames: the element lives in a child document, but the pointer is global —
   // resolve the point locally, then offset it by the frame's box in this page.
@@ -1786,20 +2163,22 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
         px = origin.x + local.x, py = origin.y + local.y
       }
     }
+    const beforePrint = await snapshotBefore()
     const taps = await pressAt(tabId, { x: px, y: py }, count, button, holdMs)
     await delay(400)
     const meta = await pageMeta(tabId)
-    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', frameId: hit.frameId, clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) })
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', frameId: hit.frameId, clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
   }
   // Text targeting: the label survives re-renders that invalidate @eN refs, and
   // needs no knowledge of the page's markup.
   if (text) {
     const hit = await findTextPoint(tabId, text)
     if (hit.scrolled) await delay(180)
+    const beforePrint = await snapshotBefore()
     const taps = await pressAt(tabId, { x: hit.x, y: hit.y }, count, button, holdMs)
     await delay(400)
     const meta = await pageMeta(tabId)
-    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches, clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) })
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches, clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
   }
   const selector = resolveTarget(target)
   // Press every match in one call: dense grids of checkboxes otherwise cost one
@@ -1807,6 +2186,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
   if (all === true) {
     const points = await evaluate(tabId, `(() => { const out = []; const nodes = document.querySelectorAll(${JSON.stringify(selector)}); for (const el of nodes) { const r = el.getBoundingClientRect(); if (r.width > 0 && r.height > 0) out.push({ x: r.left + r.width / 2, y: r.top + r.height / 2 }); } return out; })()`)
     if (!points || !points.length) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
+    const beforePrint = await snapshotBefore()
     const pressed = []
     for (const point of points) {
       await pressAt(tabId, point, 1, button)
@@ -1815,7 +2195,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     }
     await delay(200)
     const allMeta = await pageMeta(tabId)
-    return finish({ url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId) })
+    return finish({ url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
   }
   const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
@@ -1831,6 +2211,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
   // surface how many elements the selector matched so the caller can narrow it.
   const matched = await evaluate(tabId, `(() => { try { return document.querySelectorAll(${JSON.stringify(selector)}).length } catch { return 1 } })()`)
   const beforeClick = await pageMeta(tabId)
+  const beforePrint = await snapshotBefore()
   const taps = await pressAt(tabId, { x: box.x, y: box.y }, count, button)
   await delay(400)
   let meta = await pageMeta(tabId)
@@ -1841,7 +2222,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     url: meta?.url ?? '', title: meta?.title ?? '', matchedCount: matched, element: described ?? undefined,
     clickedAt: { x: box.x, y: box.y }, clicks: taps, windowRestored: layout.restored,
     dialog: recentDialog(tabId), followed,
-  })
+  }, beforePrint)
 }
 
 /**
@@ -1929,6 +2310,8 @@ const editableTargetExpr = (selector) => `(() => {
     return {
       tag, type,
       id: el.id || undefined,
+      role: el.getAttribute('role') || undefined,
+      ariaLabel: el.getAttribute('aria-label') || undefined,
       className: typeof el.className === 'string' && el.className ? el.className.slice(0, 80) : undefined,
       editable: textInput || tag === 'textarea' || el.isContentEditable === true,
       width: Math.round(r.width), height: Math.round(r.height),
@@ -1950,9 +2333,17 @@ const editableTargetExpr = (selector) => `(() => {
   // measurer must not cause.
   if (zero || blocked || state.offscreen || !state.editable) return state;
   el.focus();
-  const root = el.getRootNode();
-  const active = (root && root.activeElement) || document.activeElement;
+  // The deep walk matters: a focusable control can live inside an open shadow
+  // root, where document.activeElement is only its host.
+  let active = document.activeElement;
+  while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
   state.focused = active === el || el.contains(active);
+  state.active = active ? {
+    tag: (active.tagName || '').toLowerCase(),
+    id: active.id || undefined,
+    role: active.getAttribute ? active.getAttribute('role') || undefined : undefined,
+    ariaLabel: active.getAttribute ? active.getAttribute('aria-label') || undefined : undefined,
+  } : null;
   return state;
 })()`
 
@@ -1965,35 +2356,83 @@ function describeEditableTarget(selector, state) {
   return `${selector} (${tag}${id}) measures ${size}${view}${style}`
 }
 
+/** Name the element that really holds focus: tag, id, role and aria-label. */
+function describeActiveElement(info) {
+  if (!info) return 'no element (focus is on the document)'
+  const parts = [info.tag || 'element']
+  if (info.id) parts.push(`id "${info.id}"`)
+  if (info.role) parts.push(`role "${info.role}"`)
+  if (info.ariaLabel) parts.push(`aria-label "${info.ariaLabel}"`)
+  return `<${parts.join(' ')}>`
+}
+
+/**
+ * Read the focused element after a type call, so the reply says which control
+ * actually received the text. The Sheets name box is the case that matters: the
+ * text lands in the box, Enter moves focus to the grid, and only the descriptor
+ * shows that the caller's next keystroke will go somewhere else.
+ */
+const ACTIVE_ELEMENT_EXPR = `(() => {
+  let el = document.activeElement;
+  while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+  if (!el) return null;
+  return {
+    tag: (el.tagName || '').toLowerCase(),
+    id: el.id || undefined,
+    role: el.getAttribute ? el.getAttribute('role') || undefined : undefined,
+    ariaLabel: el.getAttribute ? el.getAttribute('aria-label') || undefined : undefined,
+  };
+})()`
+
+async function readActiveElement(tabId, contextId) {
+  try {
+    return contextId === undefined
+      ? await evaluate(tabId, ACTIVE_ELEMENT_EXPR)
+      : await evaluateInContext(tabId, contextId, ACTIVE_ELEMENT_EXPR)
+  } catch {
+    return null
+  }
+}
+
 const OFFSCREEN_EDITOR_HINT =
   'the target is most likely an offscreen measurer or focus proxy, not the editor the page displays; '
   + 'focus the visible editor first (for example click the cell or press Enter on it), then retry. '
   + 'Clipboard paste and DOM injection are not used: this tool sends real input only'
 
-async function requireEditableTarget(tabId, selector, contextId, where) {
+const PASTE_OFFSCREEN_HINT =
+  'the target is most likely an offscreen measurer or focus proxy, not the editor the page displays; '
+  + 'click the visible editor first (for example click the cell or press Enter on it), then retry.'
+
+async function requireEditableTarget(tabId, selector, contextId, where, action = 'type') {
   const source = editableTargetExpr(selector)
   const state = contextId === undefined
     ? await evaluate(tabId, source).catch(() => null)
     : await evaluateInContext(tabId, contextId, source).catch(() => null)
   if (!state) throw fail('TARGET_NOT_FOUND', `no field matches ${selector}${where ? ' in ' + where : ''}`)
   const described = describeEditableTarget(selector, state)
+  const hint = action === 'paste' ? PASTE_OFFSCREEN_HINT : OFFSCREEN_EDITOR_HINT
   if (state.display === 'none') {
-    throw fail('NOT_VISIBLE', `type cannot write into ${described}: display is "none", so nothing is rendered and nothing was typed.`)
+    throw fail('NOT_VISIBLE', `${action} cannot write into ${described}: display is "none", so nothing is rendered and nothing was typed.`)
   }
   if (state.visibility === 'hidden') {
-    throw fail('NOT_VISIBLE', `type cannot write into ${described}: visibility is "hidden", so nothing is shown and nothing was typed.`)
+    throw fail('NOT_VISIBLE', `${action} cannot write into ${described}: visibility is "hidden", so nothing is shown and nothing was typed.`)
   }
   if (state.width <= 0 || state.height <= 0) {
-    throw fail('NOT_VISIBLE', `type cannot write into ${described}: the box has zero area, so no real input can land. ${OFFSCREEN_EDITOR_HINT}.`)
+    throw fail('NOT_VISIBLE', `${action} cannot write into ${described}: the box has zero area, so no real input can land. ${hint}.`)
   }
   if (state.offscreen) {
-    throw fail('NOT_VISIBLE', `type cannot write into ${described}: it stays outside the viewport after scrolling to it, so no real input can land. ${OFFSCREEN_EDITOR_HINT}.`)
+    throw fail('NOT_VISIBLE', `${action} cannot write into ${described}: it stays outside the viewport after scrolling to it, so no real input can land. ${hint}.`)
   }
   if (!state.editable) {
-    throw fail('NOT_EDITABLE', `type cannot write into ${described}: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
+    throw fail('NOT_EDITABLE', `${action} cannot write into ${described}: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
   }
   if (!state.focused) {
-    throw fail('NOT_EDITABLE', `type cannot write into ${described}: the element refused focus, so a keystroke would go to another control. Click the field first, check that it is enabled, then retry.`)
+    throw fail(
+      'NOT_FOCUSED',
+      `${action} cannot write into ${described}: after focusing it, document.activeElement is ${describeActiveElement(state.active)} instead, `
+      + 'so a keystroke would go to another control. Click the target again, check that it is enabled and not covered by an overlay, then retry. '
+      + 'Do not assume the text went where you asked: nothing was typed.',
+    )
   }
   return state
 }
@@ -2024,6 +2463,7 @@ async function typePage({ target, text, submit, frame, forceActive: forceWanted,
     if (wanted.length && (typeof frameTyped.value !== 'string' || !frameTyped.value.includes(wanted))) {
       throw fail('TYPE_NOT_APPLIED', typedValueDidNotLand(selector, wanted, frameTyped.value))
     }
+    const activeElement = await readActiveElement(tabId, contextId)
     if (submit === true) {
       const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
       await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key })
@@ -2031,7 +2471,12 @@ async function typePage({ target, text, submit, frame, forceActive: forceWanted,
     }
     await delay(300)
     const frameMeta = await pageMeta(tabId)
-    return finish({ url: frameMeta?.url ?? '', title: frameMeta?.title ?? '', frameId: hit.frameId, typed: frameTyped.value ?? undefined, valueForced: frameTyped.forced })
+    const activeElementAfter = submit === true ? await readActiveElement(tabId, contextId) : undefined
+    return finish({
+      url: frameMeta?.url ?? '', title: frameMeta?.title ?? '', frameId: hit.frameId,
+      typed: frameTyped.value ?? undefined, valueAfter: frameTyped.value ?? undefined, valueForced: frameTyped.forced,
+      activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
+    })
   }
   const selector = resolveTarget(target)
   await requireEditableTarget(tabId, selector)
@@ -2041,6 +2486,7 @@ async function typePage({ target, text, submit, frame, forceActive: forceWanted,
   if (wanted.length && (typeof landed.value !== 'string' || !landed.value.includes(wanted))) {
     throw fail('TYPE_NOT_APPLIED', typedValueDidNotLand(selector, wanted, landed.value))
   }
+  const activeElement = await readActiveElement(tabId)
   if (submit === true) {
     const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
     await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key })
@@ -2048,7 +2494,115 @@ async function typePage({ target, text, submit, frame, forceActive: forceWanted,
   }
   await delay(300)
   const meta = await pageMeta(tabId)
-  return finish({ url: meta?.url ?? '', title: meta?.title ?? '', typed: landed.value ?? undefined, valueForced: landed.forced })
+  const activeElementAfter = submit === true ? await readActiveElement(tabId) : undefined
+  return finish({
+    url: meta?.url ?? '', title: meta?.title ?? '',
+    typed: landed.value ?? undefined, valueAfter: landed.value ?? undefined, valueForced: landed.forced,
+    activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
+  })
+}
+
+/**
+ * Put text on the OS clipboard from the extension service worker.
+ *
+ * Chrome 157 lets an extension worker holding the `clipboardWrite` permission
+ * call `navigator.clipboard.writeText` directly; older builds expose no
+ * clipboard API in a worker. The write is bounded because a clipboard call that
+ * never settles used to look like a hung browser.
+ */
+async function writeClipboardText(text) {
+  const clipboard = globalThis.navigator?.clipboard
+  if (!clipboard || typeof clipboard.writeText !== 'function') {
+    return { ok: false, reason: 'navigator.clipboard is not available in this worker' }
+  }
+  try {
+    await Promise.race([
+      clipboard.writeText(text),
+      new Promise((_, reject) => setTimeout(() => reject(fail('CLIPBOARD_TIMEOUT', 'the clipboard write did not settle in 3 s')), 3000)),
+    ])
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, reason: String(error?.message ?? error) }
+  }
+}
+
+/** Ctrl on Windows/Linux, Command on macOS. */
+async function pasteModifier() {
+  try {
+    const info = await chrome.runtime.getPlatformInfo()
+    return info?.os === 'mac' ? 4 : 2
+  } catch {
+    return 2
+  }
+}
+
+/**
+ * Insert text as a paste, without DOM injection.
+ *
+ * Preferred route: write the text to the OS clipboard and send a real Ctrl+V
+ * whose key event carries Blink's `paste` edit command. That is the browser's
+ * own paste path, so a spreadsheet explodes TSV into cells and a rich editor
+ * receives one paste instead of hundreds of keystrokes. When the clipboard
+ * write is unavailable, the honest fallback is CDP `Input.insertText`: one real
+ * browser-level insertion at the caret, reported as `mode:"insertText"` because
+ * it is not a native paste and does not trigger the page's paste handler.
+ *
+ * `key` text mode stops at 1000 keys; paste has a much higher cap and says so
+ * when it truncates.
+ */
+async function pastePage({ text, target, forceActive: forceWanted, tabId: hint }) {
+  const tabId = await requirePage(hint)
+  if (typeof text !== 'string' || text.length === 0) throw fail('BAD_ARGUMENT', 'paste needs text')
+  const { visibility, forced } = await requireInputVisibility(tabId, 'paste', forceWanted)
+  const finish = async (reply) => {
+    if (forced) await clearForced(tabId, forced)
+    return { ...reply, ...inputSuccess(visibility, forced) }
+  }
+  if (target) {
+    const selector = resolveTarget(target)
+    await requireEditableTarget(tabId, selector, undefined, undefined, 'paste')
+  } else {
+    // With no target the insertion goes to the focused element; if the page has
+    // no focused element at all, nothing can receive it.
+    const focused = await evaluate(tabId, '(() => { const el = document.activeElement; return !!el && el !== document.body && el !== document.documentElement })()').catch(() => false)
+    if (!focused) {
+      throw fail('NOT_EDITABLE', 'paste needs a focused element: click the field or cell first, or pass target. Nothing was inserted.')
+    }
+  }
+  const points = Array.from(text)
+  const truncated = points.length > PASTE_MAX_CHARS
+  const body = truncated ? points.slice(0, PASTE_MAX_CHARS).join('') : text
+  const chars = truncated ? PASTE_MAX_CHARS : points.length
+  const meta = await pageMeta(tabId)
+  const clipboard = await writeClipboardText(body)
+  if (clipboard.ok) {
+    const modifiers = await pasteModifier()
+    const key = { key: 'v', code: 'KeyV', windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers }
+    await send(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key, commands: ['paste'] })
+    await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+    await delay(150)
+    return finish({
+      url: meta?.url ?? '',
+      title: meta?.title ?? '',
+      chars,
+      truncated,
+      mode: 'clipboard',
+      note: 'clipboard paste: the text was written to the OS clipboard and the browser paste edit command was sent with a real Ctrl+V key event, so the clipboard now holds this text and a spreadsheet can explode TSV into cells. '
+        + 'Read the target back to confirm it landed; if nothing arrived, front the tab with bsb_tabs use so the page has focus and retry.',
+    })
+  }
+  await send(tabId, 'Input.insertText', { text: body })
+  await delay(150)
+  return finish({
+    url: meta?.url ?? '',
+    title: meta?.title ?? '',
+    chars,
+    truncated,
+    mode: 'insertText',
+    note: 'not a native clipboard paste: the clipboard was not written and the text was inserted with CDP Input.insertText as one run at the caret. '
+      + 'It does not fire the page paste handler and does not explode TSV into spreadsheet cells. '
+      + `The clipboard write failed because ${clipboard.reason}.`,
+  })
 }
 
 /** Resolve a click/drag endpoint from either a target/selector or a coordinate. */
@@ -2333,6 +2887,14 @@ const KEY_MAP = {
   End: { key: 'End', code: 'End', vk: 35 },
   PageUp: { key: 'PageUp', code: 'PageUp', vk: 33 },
   PageDown: { key: 'PageDown', code: 'PageDown', vk: 34 },
+  // A bare modifier name is a real key as well as a chord member: `key:"Control"`
+  // taps Control, and `keys:["Control","Alt","Digit1"]` is the Ctrl+Alt+1 chord
+  // every formatting shortcut uses. Refusing the bare names forced the caller to
+  // spell ControlLeft and to guess which spelling a chord accepted.
+  Shift: { key: 'Shift', code: 'ShiftLeft', vk: 16 },
+  Control: { key: 'Control', code: 'ControlLeft', vk: 17 },
+  Alt: { key: 'Alt', code: 'AltLeft', vk: 18 },
+  Meta: { key: 'Meta', code: 'MetaLeft', vk: 91 },
 }
 
 /**
@@ -2395,6 +2957,46 @@ const keySpec = (raw) => {
     return { key: name, code: 'Key' + name.toUpperCase(), vk: name.toUpperCase().charCodeAt(0), text: name }
   }
   return CODE_NAME.test(name) ? specForCode(name) : null
+}
+
+/**
+ * The CDP modifier bit each modifier key stands for (Alt=1, Ctrl=2, Meta=4,
+ * Shift=8). A spec's `key` is the logical name, so ControlLeft and Control both
+ * resolve to "Control" and both set the same bit.
+ */
+const MODIFIER_KEY_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 }
+const modifierBitOf = (spec) => MODIFIER_KEY_BITS[spec?.key] ?? 0
+
+/**
+ * Order a key list as a real chord and give every event its modifier mask.
+ *
+ * `keys:["ControlLeft","AltLeft","Digit1"]` used to send three ordinary keys with
+ * `modifiers: 0`, so the page saw a bare "1": the shortcut never fired and the
+ * reply still said `applied:true`. A modifier in the list now presses first, its
+ * own bit is set on its own event, and the main key carries the whole mask. The
+ * explicit `modifiers` parameter is OR-ed in, so both spellings agree.
+ */
+function chordPlan(specs, baseMask = 0) {
+  let chordMask = baseMask
+  for (const spec of specs) chordMask |= modifierBitOf(spec)
+  let running = baseMask
+  const plan = []
+  for (const spec of specs) {
+    const bit = modifierBitOf(spec)
+    const heldBefore = running
+    if (bit) running |= bit
+    plan.push({
+      spec,
+      // The key down carries every modifier held at that instant; a modifier's
+      // key up carries only the modifiers still held when it is released last,
+      // like a real keyboard does.
+      mask: bit ? running : chordMask,
+      upMask: bit ? heldBefore : chordMask,
+    })
+  }
+  // Stable sort: modifiers go down before the key they modify.
+  plan.sort((a, b) => (modifierBitOf(b.spec) ? 1 : 0) - (modifierBitOf(a.spec) ? 1 : 0))
+  return { plan, mask: chordMask }
 }
 
 
@@ -2596,6 +3198,101 @@ const inputSuccess = (visibility, forced) => ({
   ...(forced ? { forced: { ...forced, cleared: true } } : {}),
 })
 
+// The most characters one `key text` call sends. It was 1000 and the cut was
+// silent, so a long write lost its tail while the reply looked successful.
+const KEY_TEXT_CAP = 5000
+// How much of the typed text is used to prove the run landed. A prefix survives
+// the whitespace normalisation a rich editor applies to the whole paragraph.
+const KEY_TEXT_PREFIX_CHARS = 40
+
+/** The whitespace-collapsed prefix a key text run must leave in the editor. */
+const keyTextPrefix = (text) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, KEY_TEXT_PREFIX_CHARS)
+
+/**
+ * Read the editor a key text run is going into: does it own visible text, how
+ * long is that text, and does it already contain the typed prefix.
+ *
+ * `applies` is false for a page whose active element is body (a canvas game),
+ * anything that is not an input, textarea, contenteditable or role=textbox, and
+ * a zero-size or offscreen focused node (the key shim a canvas app forwards
+ * keystrokes through), so the check never runs where there is no visible editor
+ * text to compare.
+ */
+const keyTextProbeExpr = (prefix) => `(() => {
+  let el = document.activeElement;
+  while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+  const tag = el ? String(el.tagName || '').toLowerCase() : '';
+  const type = el && el.getAttribute ? String(el.getAttribute('type') || '').toLowerCase() : '';
+  const textInput = tag === 'input' && ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'].indexOf(type) === -1;
+  const role = el && el.getAttribute ? String(el.getAttribute('role') || '').toLowerCase() : '';
+  const body = document.body;
+  const text = body ? String(typeof body.innerText === 'string' ? body.innerText : body.textContent || '') : '';
+  const own = el && (textInput || tag === 'textarea')
+    ? String(el.value == null ? '' : el.value)
+    : (el && el.isContentEditable === true ? String(el.innerText || el.textContent || '') : '');
+  const wanted = ${JSON.stringify(prefix)};
+  const squash = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+  const flat = squash(text);
+  // A hidden input parked offscreen is a key shim (a canvas app forwards keys
+  // through it), not an editor whose visible text can be compared, so it is not
+  // verified either: claiming "did not land" there would be wrong.
+  const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+  const style = el && getComputedStyle ? getComputedStyle(el) : null;
+  const inView = Boolean(rect) && rect.width >= 2 && rect.height >= 2
+    && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth
+    && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));
+  return {
+    applies: inView && (tag === 'textarea' || textInput || (el && el.isContentEditable === true) || role === 'textbox') && tag !== 'body' && tag !== 'html',
+    tag,
+    url: location.href,
+    textLen: text.length,
+    ownLen: own.length,
+    landed: wanted.length > 0 && (flat.indexOf(wanted) !== -1 || squash(own).indexOf(wanted) !== -1),
+    excerpt: flat.slice(0, 120),
+  };
+})()`
+
+/**
+ * Decide whether a key text run really landed.
+ *
+ * A reply may not say "applied" while the visible document text is shorter than
+ * it was and nothing landed: that is the shape of a run that ate existing text
+ * (the Docs report: 5662 -> 5103 characters, nothing inserted). The counts and a
+ * short excerpt are in the error because an Error carries only a code and a
+ * message across the bridge.
+ */
+function keyTextVerification(before, after, prefix, sent) {
+  // Without a readable page there is no claim to make: report the before length
+  // and say the check could not finish, rather than implying nothing changed.
+  if (!after) {
+    return { textLenBefore: before.textLen, textVerified: false, textVerifyNote: 'the page could not be read after the run' }
+  }
+  const fields = { textLenBefore: before.textLen, textLenAfter: after.textLen }
+  if (after.url !== before.url) {
+    return { ...fields, textVerified: false, textVerifyNote: 'the page navigated during the run, so the text was delivered before it changed' }
+  }
+  const excerpt = after.excerpt ? JSON.stringify(after.excerpt) : '""'
+  const counts = `textLenBefore: ${before.textLen}, textLenAfter: ${after.textLen}, excerpt: ${excerpt}`
+  // A shorter document is never a success shape, even when the typed prefix is
+  // present: that is the one symptom the Docs report had, and only the caller
+  // can decide whether a replaced selection was intended.
+  if (after.textLen < before.textLen) {
+    throw fail(
+      'EDITOR_LOST_TEXT',
+      `key text left the document shorter: ${sent} key(s) were sent and the visible document text went ${before.textLen} -> ${after.textLen} characters. `
+      + `${counts}. The typed prefix ${JSON.stringify(prefix)} was ${after.landed ? 'found' : 'absent'}. A success reply is not returned while the document `
+      + 'is shorter than before: the editor may have replaced a selection, eaten existing text, or lost its caret. Re-read the page with bsb_read to see what remains.',
+    )
+  }
+  if (after.landed) return { ...fields, textVerified: true }
+  throw fail(
+    'TEXT_NOT_APPLIED',
+    `key text did not land: ${sent} key(s) were sent but the typed prefix ${JSON.stringify(prefix)} is absent from the editor text `
+    + `(${before.textLen} -> ${after.textLen} characters). ${counts}. Nothing is reported as applied: the page may have cancelled the key events, `
+    + 'moved the caret, or focused another control. Re-read the page, click the editor to place the caret, then retry.',
+  )
+}
+
 async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, target, modifiers, forceActive: forceWanted, measure, settle, tabId: hint }) {
   const tabId = await requirePage(hint)
   // forceActive:true is the escape hatch for a page whose frame clock has
@@ -2613,7 +3310,18 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       const focused = await evaluate(tabId, `(() => { const el = ${deepFindExpr(selector)}; if (!el) return false; el.focus(); return true })()`)
       if (!focused) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
     }
-    const chars = Array.from(text).slice(0, 1000)
+    // A long run used to be cut at 1000 keys with no marker, so a 1200-character
+    // write lost its tail behind an `applied:true` reply. The cap is higher now
+    // and the cut is always reported: requestedKeys, sentKeys, droppedKeys and
+    // truncated travel with every text reply.
+    const requested = Array.from(text)
+    const chars = requested.slice(0, KEY_TEXT_CAP)
+    const truncated = chars.length < requested.length
+    const prefix = keyTextPrefix(text)
+    // Verification only means something when the focused element is an editor
+    // that owns visible text. On a canvas game (or any page whose active element
+    // is body) there is no document text to compare, so the probe stays off.
+    const probe = prefix ? await evaluate(tabId, keyTextProbeExpr(prefix)).catch(() => null) : null
     const gap = Math.min(Math.max(Number(keyDelayMs) || 40, 8), 500)
     let tabs = 0
     let enters = 0
@@ -2647,10 +3355,17 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       await delay(gap)
     }
     const meta = await pageMeta(tabId)
+    const after = probe?.applies === true
+      ? await evaluate(tabId, keyTextProbeExpr(prefix)).catch(() => null)
+      : null
     if (forced) await clearForced(tabId, forced)
+    const verification = probe?.applies === true
+      ? keyTextVerification(probe, after, prefix, chars.length)
+      : null
     return {
       url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length,
-      tabs, enters, modifiers: [], ...inputSuccess(visibility, forced),
+      requestedKeys: requested.length, truncated, droppedKeys: requested.length - chars.length,
+      tabs, enters, modifiers: [], ...(verification ?? {}), ...inputSuccess(visibility, forced),
     }
   }
   const specFor = (raw) => {
@@ -2681,23 +3396,27 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
   // hold, the key stays down for holdMs (one press, no repeats).
   const hold = Math.min(Math.max(Number(holdMs) || 0, 0), 10000)
   const withText = specs.length === 1
-  const eventFor = (item, type) => ({
+  // Every key list becomes a plan: which spec, and the modifier mask its own
+  // event carries. A modifier named in `keys` now sets its bit on the main key,
+  // so Ctrl+Alt+1 is delivered as a chord instead of three bare keys.
+  const { plan, mask: chordMask } = chordPlan(specs, mask)
+  const eventFor = (item, type, eventMask = mask) => ({
     type,
     key: item.key,
     code: item.code,
     windowsVirtualKeyCode: item.vk,
     nativeVirtualKeyCode: item.vk,
-    modifiers: mask,
-    ...(withText && item.text && mask === 0 ? { text: item.text } : {}),
+    modifiers: eventMask,
+    ...(withText && item.text && eventMask === 0 ? { text: item.text } : {}),
   })
   // Releasing a key is the one event a game can never recover from losing: a
   // stuck keyDown drives the avatar until it crashes. Every path that raises a
   // key therefore releases it in a finally block, retrying the release because a
   // renderer that just hung ("not responding") still receives it on recovery.
-  const releaseKey = async (item, tries = 4) => {
+  const releaseKey = async (item, eventMask, tries = 4) => {
     for (let i = 0; i < tries; i += 1) {
       try {
-        await send(tabId, 'Input.dispatchKeyEvent', eventFor(item, 'keyUp'))
+        await send(tabId, 'Input.dispatchKeyEvent', eventFor(item, 'keyUp', eventMask))
         return true
       } catch {
         await delay(150)
@@ -2705,16 +3424,18 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     }
     return false
   }
-  const press = async (list, holdFor) => {
+  const press = async (steps, holdFor) => {
     try {
-      for (const item of list) await send(tabId, 'Input.dispatchKeyEvent', eventFor(item, 'keyDown'))
+      for (const step of steps) await send(tabId, 'Input.dispatchKeyEvent', eventFor(step.spec, 'keyDown', step.mask))
       if (holdFor > 0) await delay(holdFor)
     } finally {
-      for (const item of list) await releaseKey(item)
+      // Release in reverse: the key comes up before the modifiers that held it,
+      // like a real chord, and each release keeps the mask its press carried.
+      for (let i = steps.length - 1; i >= 0; i -= 1) await releaseKey(steps[i].spec, steps[i].upMask)
       // A throttled page can drop the keyUp even when the send resolves; the
       // repeat is idempotent for normal pages and repairs the lost event.
       await delay(24)
-      for (const item of list) await releaseKey(item)
+      for (let i = steps.length - 1; i >= 0; i -= 1) await releaseKey(steps[i].spec, steps[i].upMask)
     }
   }
   // until: hold the keys until a READ-ONLY page expression turns truthy. This is
@@ -2722,9 +3443,9 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
   // car passed x=200" is exact where a 1200 ms hold is a guess. The expression
   // runs in the same guarded world as every other read, so it can inspect but
   // never modify the page.
-  const pressUntil = async (list, expression, deadline, contextId) => {
+  const pressUntil = async (steps, expression, deadline, contextId) => {
     try {
-      for (const item of list) await send(tabId, 'Input.dispatchKeyEvent', eventFor(item, 'keyDown'))
+      for (const step of steps) await send(tabId, 'Input.dispatchKeyEvent', eventFor(step.spec, 'keyDown', step.mask))
       while (Date.now() < deadline) {
         await delay(55)
         try {
@@ -2733,17 +3454,17 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       }
       return false
     } finally {
-      for (const item of list) await releaseKey(item)
+      for (let i = steps.length - 1; i >= 0; i -= 1) await releaseKey(steps[i].spec, steps[i].upMask)
       await delay(24)
-      for (const item of list) await releaseKey(item)
+      for (let i = steps.length - 1; i >= 0; i -= 1) await releaseKey(steps[i].spec, steps[i].upMask)
     }
   }
-  const pressUntilMeasure = async (list, expression, deadline, contextId) => {
+  const pressUntilMeasure = async (steps, expression, deadline, contextId) => {
     // The condition is evaluated in the page against the measurement, not in the
     // service worker: an MV3 extension may not use eval/new Function (CSP), while
     // a CDP Runtime.evaluate is allowed to run the caller's expression.
     try {
-      for (const item of list) await send(tabId, 'Input.dispatchKeyEvent', eventFor(item, 'keyDown'))
+      for (const step of steps) await send(tabId, 'Input.dispatchKeyEvent', eventFor(step.spec, 'keyDown', step.mask))
       while (Date.now() < deadline) {
         await delay(90)
         try {
@@ -2755,9 +3476,9 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       }
       return false
     } finally {
-      for (const item of list) await releaseKey(item)
+      for (let i = steps.length - 1; i >= 0; i -= 1) await releaseKey(steps[i].spec, steps[i].upMask)
       await delay(24)
-      for (const item of list) await releaseKey(item)
+      for (let i = steps.length - 1; i >= 0; i -= 1) await releaseKey(steps[i].spec, steps[i].upMask)
     }
   }
   // Clear keys a previous call may have left down (its own hold timed out).
@@ -2776,6 +3497,7 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
         ? step.keys.map((name) => String(name ?? "").trim()).filter((name) => name !== "")
         : (step.key == null || String(step.key).trim() === "" ? [] : [String(step.key).trim()])
       const list = raw.map(specFor)
+      const { plan: stepPlan } = chordPlan(list, mask)
       const stepHold = Math.min(Math.max(Number(step.holdMs) || 0, 0), 10000)
       const stepUntil = typeof step.until === "string" && step.until.trim() ? step.until.trim() : ""
       const stepUntilMeasure = typeof step.untilMeasure === "string" && step.untilMeasure.trim() ? step.untilMeasure.trim() : ""
@@ -2783,16 +3505,16 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
         const cap = Math.min(Math.max(Number(step.timeoutMs) || 6000, 100), 60000)
         const startedAt = Date.now()
         const contextId = await guardedContext(tabId)
-        const ok = await pressUntilMeasure(list, stepUntilMeasure, startedAt + cap, contextId)
+        const ok = await pressUntilMeasure(stepPlan, stepUntilMeasure, startedAt + cap, contextId)
         untilResults.push({ index: untilResults.length, ok, ms: Date.now() - startedAt, on: "measure" })
       } else if (stepUntil) {
         const cap = Math.min(Math.max(Number(step.timeoutMs) || 6000, 100), 60000)
         const startedAt = Date.now()
         const contextId = await guardedContext(tabId)
-        const ok = await pressUntil(list, stepUntil, startedAt + cap, contextId)
+        const ok = await pressUntil(stepPlan, stepUntil, startedAt + cap, contextId)
         untilResults.push({ index: untilResults.length, ok, ms: Date.now() - startedAt })
       } else {
-        await press(list, stepHold)
+        await press(stepPlan, stepHold)
       }
       const wait = Math.min(Math.max(Number(step.waitMs) || 0, 0), 10000)
       if (wait > 0) await delay(wait)
@@ -2809,11 +3531,11 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     if (!specs.length) throw fail("BAD_ARGUMENT", "key needs key or keys")
     // Several keys can be down at once: a game that drives with one key and
     // steers with another only sees the combined gesture.
-    await press(specs, hold)
+    await press(plan, hold)
   } else {
     // Large repeats run at a lower interval: a 644-step slider sweep cost four calls
     for (let i = 0; i < times; i += 1) {
-      await press(specs, 0)
+      await press(plan, 0)
       await delay(times > 200 ? 10 : 30)
     }
   }
@@ -2852,7 +3574,7 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
   }
   if (forced) await clearForced(tabId, forced)
   return {
-    url: meta?.url ?? '', title: meta?.title ?? '', key: label, times, modifiers: mask, steps: stepList.length,
+    url: meta?.url ?? '', title: meta?.title ?? '', key: label, times, modifiers: chordMask, steps: stepList.length,
     measure: measurement, until: untilResults.length ? untilResults : undefined, dialog: recentDialog(tabId),
     ...inputSuccess(visibility, forced),
   }
@@ -4994,22 +5716,41 @@ const READ_ONLY_PRELUDE = `(() => {
   return 'installed'
 })()`
 
-/** Create (or reuse) the guarded isolated world a model expression runs in. */
+/** Create the guarded isolated world a model expression runs in. */
 async function guardedContext(tabId, frameId) {
   let target = frameId
   if (!target) {
-    const tree = await send(tabId, 'Page.getFrameTree')
+    let tree
+    try {
+      tree = await send(tabId, 'Page.getFrameTree')
+    } catch (error) {
+      throw fail('TAB_NOT_EVALUABLE', 'TAB_NOT_EVALUABLE: tab ' + tabId + ' has no reachable frame (' + String(error?.message ?? error).slice(0, 200) + '); ' + evalRecovery(tabId, undefined))
+    }
     target = tree?.frameTree?.frame?.id
   }
-  if (!target) throw fail('EVAL_FAILED', 'could not resolve the top frame')
-  const world = await send(tabId, 'Page.createIsolatedWorld', {
-    frameId: target,
-    worldName: 'dsh-bridge-readonly',
-  })
-  const contextId = world?.executionContextId
-  if (typeof contextId !== 'number') throw fail('EVAL_FAILED', 'could not create the guarded evaluation world')
-  await send(tabId, 'Runtime.evaluate', { expression: READ_ONLY_PRELUDE, contextId, returnByValue: true })
-  return contextId
+  if (!target) {
+    throw fail('TAB_NOT_EVALUABLE', 'TAB_NOT_EVALUABLE: tab ' + tabId + ' has no top frame to evaluate in; ' + evalRecovery(tabId, undefined))
+  }
+  // Creating the world is not enough: the read-only guard is what makes this
+  // world safe, and installing it can fail (a context destroyed by a
+  // navigation, an unresponsive renderer). Ignoring that exception used to run
+  // the caller's expression unguarded, and a dead context surfaced later as an
+  // empty result. Retry once with a fresh world, then fail by name.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const world = await send(tabId, 'Page.createIsolatedWorld', {
+      frameId: target,
+      worldName: 'dsh-bridge-readonly',
+    })
+    const contextId = world?.executionContextId
+    if (typeof contextId !== 'number') continue
+    const installed = await send(tabId, 'Runtime.evaluate', {
+      expression: READ_ONLY_PRELUDE,
+      contextId,
+      returnByValue: true,
+    })
+    if (!installed?.exceptionDetails) return contextId
+  }
+  throw fail('TAB_NOT_EVALUABLE', 'TAB_NOT_EVALUABLE: the read-only evaluation world could not be installed on tab ' + tabId + '; ' + evalRecovery(tabId, undefined))
 }
 
 /**
@@ -5119,10 +5860,55 @@ async function timelinePage({ selector, durationMs, intervalMs, grid, raf, frame
   return value
 }
 
+/**
+ * The way out of a tab that refused evaluation, naming the tab.
+ *
+ * A background tab, a paused page and a detached debugger all look the same to
+ * a caller that only gets "it failed": the recovery step differs, so say both
+ * routes by name (bsb_tabs use, forceActive).
+ */
+function evalRecovery(tabId, hidden) {
+  const use = 'bsb_tabs {action:"use", tabId:' + tabId + '}'
+  const force = 'forceActive:true (or bsb_act action:"forceActive" mode:"hold" for a session)'
+  return hidden === true
+    ? 'tab ' + tabId + ' is hidden, so its page may be paused: bring it forward with ' + use + ' or pass ' + force + ', then retry'
+    : 're-attach the target with ' + use + ', or pass ' + force + ', then retry'
+}
+
+/**
+ * Turn "the expression did not run on this tab" into a typed failure.
+ *
+ * TAB_NOT_VISIBLE when the tab is hidden and therefore may be paused,
+ * TAB_NOT_EVALUABLE otherwise. Both name the tab, the original CDP reason and
+ * the two recovery routes, instead of collapsing into an empty result that is
+ * indistinguishable from a page with no data (BSB-20261115-2215).
+ */
+async function evalUnavailable(tabId, detail) {
+  const message = String(detail ?? 'evaluation failed').slice(0, 300)
+  const view = await readVisibility(tabId).catch(() => null)
+  const hidden = view ? view.visibility !== 'visible' : undefined
+  const code = hidden === true ? 'TAB_NOT_VISIBLE' : 'TAB_NOT_EVALUABLE'
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined)
+  const where = 'tab ' + tabId + (tab?.url ? ' (' + String(tab.url) + ')' : '')
+  return fail(code, code + ': could not evaluate on ' + where + ': ' + message + '. ' + evalRecovery(tabId, hidden))
+}
+
 async function evalPage({ expression, awaitPromise, frame, world, tabId: hint }) {
   // The tab hint is what makes multi-tab work possible: without it every eval
   // lands on the tracked tab, so a second tab can never be read while the first
   // one is being driven.
+  if (typeof hint === 'number') {
+    // An explicit tabId must never fall back to the tracked tab: a reply that
+    // cannot say which tab answered is indistinguishable from the wrong target
+    // answering (BSB-20261115-2215).
+    const target = await chrome.tabs.get(hint).catch(() => undefined)
+    if (!target) {
+      throw fail('TAB_NOT_EVALUABLE', 'TAB_NOT_EVALUABLE: tab ' + hint + ' is not open, so the expression cannot run there. Run bsb_tabs {action:"list"}, then bsb_tabs {action:"use", tabId:<id>} to target an open tab, or bsb_open to load the URL in a new one.')
+    }
+    if (isInternalUrl(target.url)) {
+      throw fail('TAB_NOT_EVALUABLE', 'TAB_NOT_EVALUABLE: tab ' + hint + ' is ' + String(target.url ?? '') + ', a browser-internal page bsb cannot script. Run bsb_tabs {action:"list"}, then bsb_tabs {action:"use", tabId:<id>} for a scriptable tab, or bsb_open the http(s) URL with newTab:true.')
+    }
+  }
   const tabId = await requirePage(hint)
   if (typeof expression !== 'string' || expression.trim().length === 0) throw fail('BAD_ARGUMENT', 'expression is required')
   // world:'main' evaluates in the page's own world (Runtime.evaluate with no
@@ -5130,18 +5916,49 @@ async function evalPage({ expression, awaitPromise, frame, world, tabId: hint })
   // world, but the caller may ask for the real one when it needs page state
   // (framework instances, closures) that the isolated world cannot see.
   const useMain = String(world || 'isolated') === 'main'
-  let contextId
-  let extra = { world: useMain ? 'main' : 'isolated' }
-  if (frame) {
-    const hit = resolveFrameArg(await frameList(tabId), frame)
-    if (!hit) throw fail('FRAME_NOT_FOUND', `no frame matches ${JSON.stringify(String(frame))}`)
-    if (!useMain) contextId = await guardedContext(tabId, hit.frameId)
-    extra = { frameId: hit.frameId, url: hit.url, world: extra.world }
-  } else if (!useMain) {
-    contextId = await guardedContext(tabId)
+  if (frame && useMain) {
+    // Runtime.evaluate without a contextId only ever lands in the TOP frame's
+    // main world. Running a frame-targeted expression there while echoing the
+    // frame id would answer for the wrong document, so refuse by name.
+    throw fail('UNSUPPORTED', 'frame + world:"main" is not supported: the main world is only addressable for the top frame. Read the frame with the default isolated world, or bsb_open the frame URL directly.')
   }
-  const value = await evaluateProgram(tabId, expression, { contextId, awaitPromise: awaitPromise === true })
-  return { result: value === undefined ? null : value, ...extra }
+  // Name the target before evaluating: tab id, document URL and the visibility
+  // the page reports. A reply that carries none of these cannot be attributed
+  // to a tab when several are open.
+  const probe = await evaluate(tabId, '({ url: location.href, visibility: document.visibilityState })').catch(() => null)
+  if (!probe) throw await evalUnavailable(tabId, 'the tab did not answer a read-only probe')
+  const extra = {
+    tabId,
+    url: String(probe.url ?? ''),
+    world: useMain ? 'main' : 'isolated',
+    visibility: String(probe.visibility ?? 'unknown'),
+  }
+  let contextId
+  let value
+  try {
+    if (frame) {
+      const hit = resolveFrameArg(await frameList(tabId), frame)
+      if (!hit) throw fail('FRAME_NOT_FOUND', `no frame matches ${JSON.stringify(String(frame))}`)
+      contextId = await guardedContext(tabId, hit.frameId)
+      extra.frameId = hit.frameId
+      if (hit.url) extra.url = hit.url
+    } else if (!useMain) {
+      contextId = await guardedContext(tabId)
+    }
+    value = await evaluateProgram(tabId, expression, { contextId, awaitPromise: awaitPromise === true })
+  } catch (error) {
+    const code = String(error?.code ?? '')
+    // A page error, a Promise result, a read-only violation and a typed target
+    // failure are the caller's own findings and keep their code and message.
+    // Only an untyped/CDP transport failure is retyped as "this tab could not
+    // be evaluated".
+    if (code !== '' && code !== 'CDP_ERROR') throw error
+    throw await evalUnavailable(tabId, error?.message ?? error)
+  }
+  // `result: null` alone cannot distinguish null from undefined; the explicit
+  // flag keeps a legitimate empty object ({}) meaning only that.
+  if (value === undefined) return { ...extra, result: null, undefined: true }
+  return { ...extra, result: value }
 }
 
 /** Evaluate a value expression, or a statement list when the expression does not parse. */
@@ -5163,7 +5980,14 @@ async function evaluateProgram(tabId, expression, { contextId, awaitPromise = fa
     const response = await send(tabId, 'Runtime.evaluate', params)
     if (!response?.exceptionDetails) {
       const remote = response?.result
-      const value = remote?.value
+      // Runtime.evaluate always answers with a RemoteObject. No result means the
+      // evaluation never ran (a destroyed isolated-world context, a detached
+      // target); returning undefined here used to collapse "could not evaluate"
+      // into the same shape as a legitimate undefined value.
+      if (!remote || typeof remote.type !== 'string') {
+        throw fail('TAB_NOT_EVALUABLE', 'TAB_NOT_EVALUABLE: tab ' + tabId + ' returned no evaluation result (the target may have navigated or detached). Re-adopt it with bsb_tabs {action:"use", tabId:' + tabId + '}, or pass forceActive:true, then retry.')
+      }
+      const value = remote.value
       if (value && typeof value === 'object' && value.__promise === true) {
         throw fail('PROMISE_RESULT', 'the expression returned a Promise; pass awaitPromise:true, or await it inside the expression')
       }
@@ -5360,7 +6184,99 @@ async function pixelsPage({ selector, grid, scale, points: wanted, radius, tabId
   return { url: (await pageMeta(tabId))?.url ?? '', selector: sel, width, height, cols, rows, cells }
 }
 
-async function inspectPage({ selector, offset, limit, text: withText, href: withHref, image: withImage, state: withState, tabId: hint }) {
+/**
+ * Decode a known redirector href into its final target, without navigating.
+ *
+ * This is the page-side half of bsb_read {mode:"rows", resolve:true}. It is
+ * serialized into the page, so it must stay self-contained: no outer
+ * references, no network, no navigation and no DOM writes. It decodes only what
+ * is mechanically decodable; everything else is reported as
+ * resolvableBy:"navigation" instead of a guessed URL.
+ *
+ * Recognized shapes:
+ *   google.<tld>/url?q=<url> or ?url=<url>
+ *   google.<tld>/goto?url=<base64>  (standard or URL-safe, padded or not)
+ *   l.facebook.com/l.php?u=<url>    (also lm.facebook.com)
+ *   t.co/<token>                    (recognized, never decodable)
+ */
+function resolveRedirectHref(href) {
+  const raw = String(href == null ? '' : href).trim()
+  if (!raw) return null
+  let url
+  try { url = new URL(raw) } catch { return null }
+  const host = url.hostname.toLowerCase()
+  const path = url.pathname.toLowerCase()
+  const search = url.search || ''
+
+  // Read a parameter from the raw query string. URLSearchParams turns a literal
+  // '+' into a space, which corrupts a standard-base64 payload, so the raw value
+  // is percent-decoded instead.
+  const param = (name) => {
+    const match = new RegExp('[?&]' + name + '=([^&]*)', 'i').exec(search)
+    if (!match) return ''
+    try { return decodeURIComponent(match[1]) } catch { return match[1] }
+  }
+
+  // Only an absolute http(s) target counts as decoded. A relative path or a
+  // javascript: payload is not a final target and must not be presented as one.
+  // A redirector occasionally percent-encodes its target twice, so try a few
+  // decode rounds before giving up.
+  const finalTarget = (value) => {
+    let text = String(value == null ? '' : value).trim()
+    if (!text) return ''
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (/^https?:\/\//i.test(text)) {
+        try { return new URL(text).href } catch { return '' }
+      }
+      try { text = decodeURIComponent(text) } catch { return '' }
+    }
+    return ''
+  }
+
+  const decoded = (value) => {
+    const target = finalTarget(value)
+    return target ? { resolved: true, hrefResolved: target, resolvableBy: 'decoded' } : null
+  }
+  const byNavigation = { resolved: false, resolvableBy: 'navigation' }
+
+  const base64Target = (payload) => {
+    let text = String(payload == null ? '' : payload).replace(/\s+/g, '')
+    if (!text) return ''
+    // URL-safe alphabet and missing padding are both common in the wild.
+    text = text.replace(/-/g, '+').replace(/_/g, '/')
+    const remainder = text.length % 4
+    if (remainder === 1) return ''
+    if (remainder) text += new Array(5 - remainder).join('=')
+    let binary = ''
+    try { binary = atob(text) } catch { return '' }
+    if (typeof TextDecoder === 'function') {
+      try {
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+        return new TextDecoder('utf-8').decode(bytes)
+      } catch {}
+    }
+    return binary
+  }
+
+  // t.co paths are opaque tokens: the target is only obtainable by following the
+  // redirect, so it is named rather than guessed.
+  if (host === 't.co' || host.endsWith('.t.co')) return byNavigation
+
+  const google = /(^|\.)google\.[a-z]{2,}(\.[a-z]{2,})?$/.test(host)
+  if (google && (path === '/url' || path === '/url/')) {
+    return decoded(param('q')) || decoded(param('url')) || byNavigation
+  }
+  if (google && (path === '/goto' || path === '/goto/')) {
+    return decoded(base64Target(param('url'))) || byNavigation
+  }
+  if ((host === 'l.facebook.com' || host === 'lm.facebook.com') && (path === '/l.php' || path === '/l.php/')) {
+    return decoded(param('u')) || byNavigation
+  }
+  return null
+}
+
+async function inspectPage({ selector, offset, limit, text: withText, href: withHref, image: withImage, state: withState, resolve: withResolve, tabId: hint }) {
   const tabId = await requirePage(hint)
   const sel = typeof selector === 'string' ? selector.trim() : ''
   if (!sel) throw fail('NO_SELECTOR', 'pass a CSS selector such as "a", "table tr" or "div.card"')
@@ -5368,10 +6284,18 @@ async function inspectPage({ selector, offset, limit, text: withText, href: with
   const skip = Math.min(Math.max(Number(offset) || 0, 0), 1000)
   const want = {
     text: withText !== false,
-    href: Boolean(withHref),
+    // resolve is about a link, so asking for it implies the href field.
+    href: Boolean(withHref) || Boolean(withResolve),
     image: Boolean(withImage),
     state: Boolean(withState),
+    resolve: Boolean(withResolve),
   }
+  // The resolver runs inside the page, next to the href it decodes. Embedding
+  // its source keeps the row loop single-round-trip and adds no DOM or network
+  // work: it is pure string decoding.
+  const resolveExpr = want.resolve
+    ? 'if (rec.href) { const res = (' + resolveRedirectHref.toString() + ')(rec.href); if (res) { rec.resolved = res.resolved; if (res.hrefResolved) rec.hrefResolved = res.hrefResolved; if (res.resolvableBy) rec.resolvableBy = res.resolvableBy } }'
+    : ''
   const expression = `(() => {
     const nodes = Array.from(document.querySelectorAll(${JSON.stringify(sel)}))
     const out = []
@@ -5405,6 +6329,7 @@ async function inspectPage({ selector, offset, limit, text: withText, href: with
           if (!rec.href && mail) { rec.href = mail; rec.hrefSource = 'descendant' }
         }
       }
+      ${resolveExpr}
       if (${want.image}) { const im = el.matches('img') ? el : el.querySelector('img'); if (im) rec.image = im.currentSrc || im.src || im.getAttribute('src') || '' }
       if (${want.state}) {
         const control = el.matches('input,select,textarea,option') ? el : el.querySelector('input,select,textarea')
@@ -5434,6 +6359,283 @@ async function inspectPage({ selector, offset, limit, text: withText, href: with
   })()`
   const value = await evaluate(tabId, expression)
   return { url: (await pageMeta(tabId))?.url ?? '', selector: sel, ...(value || { count: 0, shown: 0, items: [] }) }
+}
+
+/**
+ * Fold one DOM read into the feed collection.
+ *
+ * Dedupe happens on the item key, so a virtualized list that recycles nodes
+ * across scroll steps returns each key once. `recycled` counts distinct keys
+ * that were collected and then disappeared from a later DOM read: it tells the
+ * caller whether the surface is smaller than the list it stands for.
+ */
+function feedMerge(state, read) {
+  const items = Array.isArray(read && read.items) ? read.items : []
+  const current = new Set()
+  let added = 0
+  for (const item of items) {
+    if (!item || typeof item.key !== 'string' || !item.key) continue
+    current.add(item.key)
+    if (state.keys.has(item.key)) {
+      state.duplicatesDropped += 1
+      continue
+    }
+    // The cap is a hard bound on the reply, so extra keys in the same read are
+    // dropped rather than collected past it.
+    if (state.items.length >= state.cap) continue
+    state.keys.add(item.key)
+    state.items.push(item)
+    added += 1
+  }
+  for (const key of state.previousKeys) {
+    if (current.has(key)) continue
+    if (!state.keys.has(key) || state.recycledKeys.has(key)) continue
+    state.recycledKeys.add(key)
+    state.recycled += 1
+  }
+  state.previousKeys = current
+  return added
+}
+
+/**
+ * Read one DOM snapshot of a feed. Page-side, read-only.
+ *
+ * An item key is the link when the surface gives one, otherwise the visible
+ * text, normalized and cut at 240 characters so a long post cannot flood the
+ * reply. A matched node with neither is a placeholder or a wrapper, not an
+ * item: it is counted in `unkeyed` instead of being given a positional key that
+ * could not survive recycling.
+ */
+function feedCollect(selector, dedupeBy) {
+  const nodes = Array.from(document.querySelectorAll(selector))
+  const preferText = dedupeBy === 'text'
+  const out = []
+  let unkeyed = 0
+  for (const el of nodes) {
+    const r = el.getBoundingClientRect()
+    const rendered = r.width > 0 && r.height > 0
+    const inView = rendered && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
+    let href = ''
+    if (el.matches('a[href]')) {
+      const own = typeof el.href === 'string' ? el.href : (el.getAttribute('href') || '')
+      if (/^https?:/i.test(own)) href = own
+    }
+    if (!href) {
+      for (const link of el.querySelectorAll('a[href]')) {
+        const url = typeof link.href === 'string' ? link.href : (link.getAttribute('href') || '')
+        if (/^https?:/i.test(url)) { href = url; break }
+      }
+    }
+    const full = (typeof el.innerText === 'string' ? el.innerText : '').replace(/\s+/g, ' ').trim()
+    const text = full.slice(0, 240)
+    const key = preferText ? (text || href) : (href || text)
+    if (!key) { unkeyed += 1; continue }
+    const keySource = preferText ? (text ? 'text' : 'href') : (href ? 'href' : 'text')
+    const item = {
+      key,
+      keySource,
+      text,
+      href,
+      visible: inView,
+      box: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+    }
+    if (full.length > 240) item.textTruncated = true
+    out.push(item)
+  }
+  return { matched: nodes.length, unkeyed, items: out }
+}
+
+/**
+ * Scroll the feed's own scroller by 0.8 of a viewport. Page-side, read-only.
+ *
+ * The document scroller is the default. A surface that scrolls inside a panel
+ * is driven through the nearest scrollable element at or above the first match,
+ * so the page's own layout and listeners do the work: no container is created
+ * and no scroll position is invented.
+ */
+function feedScroll(selector) {
+  let scroller = null
+  const first = document.querySelector(selector)
+  if (first) {
+    let node = first.parentElement
+    while (node && node !== document.documentElement) {
+      const style = getComputedStyle(node)
+      const overflow = style ? style.overflowY : ''
+      if ((overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') && node.scrollHeight > node.clientHeight + 4) {
+        scroller = node
+        break
+      }
+      node = node.parentElement
+    }
+  }
+  const readTop = () => (scroller ? scroller.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0))
+  const before = readTop()
+  const step = scroller ? scroller.clientHeight * 0.8 : innerHeight * 0.8
+  if (scroller) scroller.scrollBy(0, step)
+  else window.scrollBy(0, step)
+  const after = readTop()
+  const max = Math.max(0, scroller
+    ? scroller.scrollHeight - scroller.clientHeight
+    : document.documentElement.scrollHeight - innerHeight)
+  return {
+    scroller: scroller ? 'ancestor' : 'window',
+    before: Math.round(before),
+    after: Math.round(after),
+    max: Math.round(max),
+    step: Math.round(step),
+    scrolled: after > before + 1,
+    atEnd: after >= max - 1,
+  }
+}
+
+const FEED_HIDDEN_HINT =
+  'the tab is hidden, so a surface that renders only while visible can read as a shell; '
+  + 'pass forceActive:true to hold the page lifecycle for the collection (it is released afterwards), then retry'
+
+const FEED_UNKEYED_HINT =
+  'elements matched but none had an href or visible text, so they are placeholders or wrappers, not items: '
+  + 'the feed probably did not render (scroll and retry, or forceActive:true on a hidden tab)'
+
+/**
+ * Scroll-and-collect a virtualized list, in one call, without a caller loop.
+ *
+ * Read-only: it scrolls the page's own scroller and reads the DOM, nothing else.
+ * A hidden tab is not woken unless the caller asks with forceActive:true, and a
+ * hold started here is released before the reply is returned. The reply always
+ * carries `count`, `reason`, `scrolls`, `duplicatesDropped` and `recycled`, so a
+ * caller can tell an empty feed from one that never rendered.
+ */
+async function feedPage({ selector, maxItems, scroll, dedupeBy, until, forceActive: forceWanted, tabId: hint }) {
+  const tabId = await requirePage(hint)
+  const sel = typeof selector === 'string' ? selector.trim() : ''
+  if (!sel) throw fail('NO_SELECTOR', 'pass a CSS selector such as "[role=article]", "div.post" or "li.result"')
+  const cap = Math.min(Math.max(Math.trunc(Number(maxItems)) || 20, 1), 200)
+  const wantScroll = scroll === true
+  const keyMode = dedupeBy === undefined || dedupeBy === null || dedupeBy === '' ? 'auto' : String(dedupeBy)
+  if (keyMode !== 'auto' && keyMode !== 'href' && keyMode !== 'text') {
+    throw fail('BAD_ARGUMENT', 'dedupeBy must be "auto", "href" or "text"')
+  }
+  const untilExpr = typeof until === 'string' && until.trim() ? until.trim() : ''
+  let visibility = await pageVisibility(tabId)
+  let forced
+  let forcedError = ''
+  let wasHeld = false
+  if (visibility === 'hidden' && forceWanted) {
+    await heldReady
+    wasHeld = heldForced.has(tabId)
+    try {
+      forced = await forceActive(tabId, { mode: 'hold' })
+    } catch (error) {
+      // A refused wake is not fatal for a read: report it and read what is there.
+      forced = null
+      forcedError = String(error && error.message ? error.message : error)
+    }
+    visibility = await pageVisibility(tabId)
+  }
+  const state = {
+    items: [],
+    keys: new Set(),
+    previousKeys: new Set(),
+    recycledKeys: new Set(),
+    duplicatesDropped: 0,
+    recycled: 0,
+    cap,
+  }
+  let scrolls = 0
+  let noGrowth = 0
+  let stalled = 0
+  let lastMatched = 0
+  let lastUnkeyed = 0
+  let untilError = ''
+  let reason = ''
+  let released = false
+
+  const readOnce = async () => {
+    const read = await evaluate(tabId, `(${feedCollect.toString()})(${JSON.stringify(sel)}, ${JSON.stringify(keyMode)})`)
+    if (!read || typeof read !== 'object') throw fail('CDP_ERROR', 'the feed could not be read')
+    lastMatched = Math.max(0, Math.trunc(Number(read.matched)) || 0)
+    lastUnkeyed = Math.max(0, Math.trunc(Number(read.unkeyed)) || 0)
+    return feedMerge(state, read)
+  }
+
+  const untilHit = async () => {
+    if (!untilExpr) return false
+    let result
+    try {
+      result = await evaluate(tabId, `(() => { try { return { ok: true, hit: Boolean(${untilExpr}) } } catch (error) { return { ok: false, error: String((error && error.message) || error) } } })()`)
+    } catch (error) {
+      result = { ok: false, error: String(error && error.message ? error.message : error) }
+    }
+    if (!result || result.ok !== true) {
+      if (!untilError) untilError = String((result && result.error) || 'the until expression could not be evaluated')
+      return false
+    }
+    return result.hit === true
+  }
+
+  try {
+    await readOnce()
+    if (await untilHit()) reason = 'until'
+    else if (state.items.length >= cap) reason = 'max-items'
+    else if (!wantScroll) reason = 'no-growth'
+    else {
+      for (;;) {
+        const moved = await evaluate(tabId, `(${feedScroll.toString()})(${JSON.stringify(sel)})`)
+        scrolls += 1
+        // A feed that loads on scroll needs the page's own frame clock to paint
+        // the next batch, so this is a real pause, not a tight loop.
+        await delay(500 + Math.floor(Math.random() * 200))
+        const added = await readOnce()
+        if (await untilHit()) { reason = 'until'; break }
+        if (state.items.length >= cap) { reason = 'max-items'; break }
+        if (added > 0) {
+          noGrowth = 0
+          stalled = 0
+          continue
+        }
+        noGrowth += 1
+        // A scroller that moved is not at its end, even when this step found
+        // nothing new; only a step that could not move counts towards it.
+        if (moved && moved.scrolled === true) stalled = 0
+        else stalled += 1
+        if (stalled >= 2) { reason = 'end-of-scroll'; break }
+        if (noGrowth >= 3) { reason = 'no-growth'; break }
+      }
+    }
+  } finally {
+    if (forced && !wasHeld) {
+      const release = await releaseActive(tabId).catch(() => null)
+      released = Boolean(release && release.released)
+    }
+  }
+
+  const meta = await pageMeta(tabId).catch(() => null)
+  const reply = {
+    url: meta?.url ?? '',
+    selector: sel,
+    count: state.items.length,
+    items: state.items,
+    scrolls,
+    duplicatesDropped: state.duplicatesDropped,
+    recycled: state.recycled,
+    reason,
+    matched: lastMatched,
+    unkeyed: lastUnkeyed,
+    maxItems: cap,
+    dedupeBy: keyMode,
+    scroll: wantScroll,
+    visibility,
+    hidden: visibility === 'hidden',
+  }
+  if (untilExpr) reply.until = untilExpr
+  if (untilError) reply.untilError = untilError
+  if (forced) reply.forced = { applied: forced.applied, held: true, reused: Boolean(forced.reused), released, cleared: released }
+  else if (forcedError) reply.forceActiveError = forcedError
+  if (state.items.length === 0) {
+    if (visibility === 'hidden' && !forcedError) reply.hint = FEED_HIDDEN_HINT
+    else if (visibility !== 'hidden' && lastUnkeyed > 0) reply.hint = FEED_UNKEYED_HINT
+  }
+  return reply
 }
 
 async function networkPage({ action, limit, filter, detail, fields, tabId: hint }) {

@@ -337,6 +337,60 @@ try {
   assert.ok(/fields: \{ type: 'array'/.test(toolsSource), 'bsb_observe does not document fields')
   console.log('ok  eval tab targeting, result spilling and network projection are pinned')
 
+  // Navigation-state guards (BSB-20261115-2112 / 2205). A per-tab navigation
+  // error is the LAST navigation, not a history: it must be replaced by a later
+  // success, never merged forward, and it may only be reported against a
+  // document that is actually failed. A document still parsing must not be
+  // judged as an interstitial, because 0 chars/0 elements is its normal state.
+  {
+    const hintBody = workerSource.slice(workerSource.indexOf('function documentHint'), workerSource.indexOf('// Page functions'))
+    assert.ok(/function documentIsHealthy\(state, requestedUrl\)/.test(workerSource), 'sw.js lost the healthy-document test')
+    assert.ok(/function documentIsFailed\(state\)/.test(workerSource), 'sw.js lost the failed-document test')
+    assert.ok(/documentIsHealthy\(state, requestedUrl\)/.test(hintBody), 'documentHint reports a cached failure against a healthy document')
+    assert.ok(/if \(documentIsHealthy\(state, requestedUrl\)\) return undefined/.test(hintBody), 'documentHint no longer suppresses a stale navigation error')
+    assert.ok(/readyState !== 'complete'/.test(hintBody), 'documentHint asserts a content verdict before readyState is complete')
+    assert.ok(/no content verdict yet/.test(hintBody), 'documentHint has no loading-specific state')
+    assert.ok(/state\.hasSplash === true/.test(hintBody) && /empty shell or interstitial/.test(hintBody), 'documentHint lost the complete-document splash/interstitial verdicts')
+    const rememberBody = workerSource.slice(workerSource.indexOf('function rememberNav'), workerSource.indexOf('const navOutcome = (tabId)'))
+    assert.ok(!/\.\.\.previous/.test(rememberBody), 'rememberNav merges the previous navigation outcome forward again')
+    assert.ok(/navOutcomes\.set\(tabId, \{/.test(rememberBody), 'rememberNav no longer stores a per-tab outcome')
+    const readBody = workerSource.slice(workerSource.indexOf('async function readPage'), workerSource.indexOf('const resolveTarget'))
+    assert.ok(/documentIsHealthy\(state, outcome\.requestedUrl\)/.test(readBody), 'readPage no longer clears a stale cached navigation error')
+    assert.ok(/documentIsFailed\(state\)/.test(readBody), 'readPage passes a cached navigationError without checking the current document')
+    assert.ok(/navigationError: currentFailed \? outcome\?\.navigationError : undefined/.test(readBody), 'readPage forwards the cached error even when the document is healthy')
+  }
+  console.log('ok  nav-error clearing and the loading/no-verdict state are pinned')
+
+  // Eval-target guards (BSB-20261115-2215). A reply must name the tab, world,
+  // URL and visibility it answered for; undefined gets its own flag; a target
+  // that cannot be evaluated fails with a typed error and a recovery route.
+  {
+    assert.ok(/function evalRecovery\(tabId, hidden\)/.test(workerSource), 'sw.js lost the eval recovery hint')
+    assert.ok(/function evalUnavailable\(tabId, detail\)/.test(workerSource), 'sw.js lost the typed eval failure')
+    assert.ok(/TAB_NOT_EVALUABLE/.test(workerSource) && /TAB_NOT_VISIBLE/.test(workerSource), 'eval failures lost their typed codes')
+    assert.ok(/bsb_tabs \{action:"use", tabId/.test(workerSource), 'the eval failure no longer names bsb_tabs use with the tab')
+    assert.ok(/forceActive:true/.test(workerSource), 'the eval failure no longer names forceActive')
+    assert.ok(/if \(value === undefined\) return \{ \.\.\.extra, result: null, undefined: true \}/.test(evalBody), 'evalPage no longer marks an undefined result')
+    assert.ok(/tabId,/.test(evalBody) && /visibility: String\(probe\.visibility/.test(evalBody), 'evalPage does not echo tabId/visibility')
+    assert.ok(/world: useMain \? 'main' : 'isolated'/.test(evalBody), 'evalPage no longer echoes the world that answered')
+    assert.ok(/frame && useMain/.test(evalBody) && /UNSUPPORTED/.test(evalBody), 'evalPage silently answers a frame-targeted main-world eval from the top frame')
+    const programBody = workerSource.slice(workerSource.indexOf('async function evaluateProgram'), workerSource.indexOf('async function sheetPage'))
+    assert.ok(/typeof remote\.type !== 'string'/.test(programBody), 'evaluateProgram still collapses "no evaluation result" into undefined')
+    const guardedBody = workerSource.slice(workerSource.indexOf('async function guardedContext'), workerSource.indexOf('async function timelinePage'))
+    assert.ok(/installed\?\.exceptionDetails/.test(guardedBody), 'guardedContext ignores a failed read-only prelude install')
+    assert.ok(/READ_ONLY_PRELUDE/.test(guardedBody), 'guardedContext no longer installs the read-only prelude')
+    const evalTools = toolsSource.slice(toolsSource.indexOf("name: 'bsb_eval'"), toolsSource.indexOf("name: 'bsb_open'"))
+    assert.ok(/tabId: \{ type: 'number' \}/.test(evalTools), 'bsb_eval schema lost the tabId echo')
+    assert.ok(/visibility: \{ type: 'string' \}/.test(evalTools), 'bsb_eval schema lost the visibility echo')
+    assert.ok(/undefined: \{ type: 'boolean' \}/.test(evalTools), 'bsb_eval schema lost the undefined flag')
+    assert.ok(/receipt\.visibility = raw\.visibility/.test(evalTools) && /receipt\.undefined = true/.test(evalTools), 'the bsb_eval spill receipt drops the target fields')
+    const skillSource = await readFile(new URL('../skill/browser-bridge/SKILL.md', import.meta.url), 'utf8')
+    assert.ok(/undefined:true/.test(skillSource), 'SKILL.md no longer documents the undefined eval result')
+    assert.ok(/still loading/.test(skillSource), 'SKILL.md no longer documents the loading state')
+    assert.ok(/stale/.test(skillSource), 'SKILL.md no longer documents cache clearing on a successful navigation')
+  }
+  console.log('ok  eval target echo, typed failures and the docs are pinned')
+
   // Reading guards from the SERP, Facebook timestamp and Sheets canvas tickets.
   // The rows reply used to leak inline script as text, drop every descendant
   // link, cut text without a marker and read a canvas app as an empty page; text
@@ -363,6 +417,172 @@ try {
     assert.ok(/normalize: args\?\.normalize === true/.test(toolsSource), 'bsb_read accepts normalize but no longer forwards it')
   }
   console.log('ok  read extraction guards pinned (descendant href, innerText only, truncation, canvas hint, normalize)')
+
+  // Feed collection and redirect-resolution guards (tickets 2148/2149). Feed
+  // mode exists so a caller stops hand-rolling scroll + wait + dedupe against a
+  // virtualized list; resolve exists so a SERP harvest does not need one
+  // navigation per result. Both are read-only: no DOM writes, no navigation, no
+  // network request. The self-contained helpers are exercised in a VM; the
+  // two that read a page get a small stub DOM instead of a browser.
+  {
+    const sourceOf = (name) => {
+      const start = workerSource.indexOf('function ' + name + '(')
+      assert.ok(start >= 0, 'extension/sw.js lost ' + name)
+      const stop = workerSource.slice(start + 1).search(/\n(?:async )?function |\nconst |\n\/\*\*/)
+      return workerSource.slice(start, stop > 0 ? start + 1 + stop : workerSource.length)
+    }
+    const resolverSrc = sourceOf('resolveRedirectHref')
+    const collectSrc = sourceOf('feedCollect')
+    const scrollSrc = sourceOf('feedScroll')
+    const mergeSrc = sourceOf('feedMerge')
+    const feedBody = sourceOf('feedPage')
+    const load = (src) => new Function('return (' + src + ')')()
+    const resolver = load(resolverSrc)
+
+    // Redirect resolution: decode what is mechanically decodable, mark the rest
+    // for navigation, never invent a target.
+    assert.equal(resolver('https://example.com/post/1'), null, 'a plain href is treated as a redirector')
+    assert.deepEqual(
+      resolver('https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fpost%3Fid%3D7&sa=t'),
+      { resolved: true, hrefResolved: 'https://example.com/post?id=7', resolvableBy: 'decoded' },
+      'google /url?q= is not decoded',
+    )
+    assert.equal(
+      resolver('https://www.google.co.id/url?sa=t&url=https%3A%2F%2Fexample.org%2Fx')?.hrefResolved,
+      'https://example.org/x',
+      'google /url?url= is not decoded',
+    )
+    const payload = Buffer.from('https://example.net/a?b=>?', 'utf8').toString('base64')
+    assert.equal(
+      resolver('https://www.google.com/goto?url=' + encodeURIComponent(payload))?.hrefResolved,
+      'https://example.net/a?b=%3E?',
+      'google /goto standard base64 is not decoded',
+    )
+    const urlSafe = payload.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    assert.equal(
+      resolver('https://www.google.com/goto?url=' + urlSafe)?.hrefResolved,
+      'https://example.net/a?b=%3E?',
+      'google /goto URL-safe unpadded base64 is not decoded',
+    )
+    assert.equal(
+      resolver('https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.org%2Fp%2F9&h=AT0')?.hrefResolved,
+      'https://example.org/p/9',
+      'l.facebook.com/l.php is not decoded',
+    )
+    assert.deepEqual(resolver('https://t.co/AbCdEf123'), { resolved: false, resolvableBy: 'navigation' }, 't.co is given a guessed target')
+    assert.deepEqual(resolver('https://www.google.com/goto?url=not-base64!!'), { resolved: false, resolvableBy: 'navigation' }, 'an undecodable goto payload is not marked for navigation')
+    assert.deepEqual(resolver('https://www.google.com/url?q=javascript%3Aalert(1)'), { resolved: false, resolvableBy: 'navigation' }, 'a non-http payload is presented as a target')
+    for (const [name, src] of [['resolveRedirectHref', resolverSrc], ['feedCollect', collectSrc], ['feedScroll', scrollSrc]]) {
+      assert.ok(!/innerHTML|outerHTML\s*=|insertAdjacentHTML|appendChild|createElement|\.style\./.test(src), name + ' writes to the DOM')
+      assert.ok(!/\.click\(|Page\.navigate|fetch\(|XMLHttpRequest/.test(src), name + ' navigates or touches the network')
+    }
+
+    // Feed: stable keys, one key once, recycled keys counted, cap honoured.
+    const merge = load(mergeSrc)
+    const state = {
+      items: [],
+      keys: new Set(),
+      previousKeys: new Set(),
+      recycledKeys: new Set(),
+      duplicatesDropped: 0,
+      recycled: 0,
+      cap: 3,
+    }
+    assert.equal(merge(state, { items: [{ key: 'a' }, { key: 'b' }, { key: 'a' }] }), 2, 'feed merge did not collect two distinct keys')
+    assert.equal(state.duplicatesDropped, 1, 'feed merge did not count an in-read duplicate')
+    assert.equal(merge(state, { items: [{ key: 'b' }, { key: 'c' }] }), 1, 'feed merge did not add the new key')
+    assert.equal(state.recycled, 1, 'feed merge did not report a key that vanished from the DOM')
+    assert.equal(merge(state, { items: [{ key: 'd' }] }), 0, 'feed merge collected past the cap')
+    assert.equal(state.items.length, 3, 'feed merge exceeded the cap')
+
+    // Stub DOM: bind the page globals as closure parameters instead of faking a
+    // whole browser. This pins key choice, placeholder skipping, viewport
+    // visibility, the item box and nested-scroller discovery.
+    const withPage = (src, scope) => {
+      const names = Object.keys(scope)
+      return new Function(...names, 'return (' + src + ')')(...names.map((key) => scope[key]))
+    }
+    const rect = (top) => ({ x: 0, y: top, width: 300, height: 100, top, bottom: top + 100, left: 0, right: 300 })
+    const card = ({ text = '', href = '', links = [], top = 0 } = {}) => ({
+      innerText: text,
+      href,
+      getAttribute: (name) => (name === 'href' ? href : null),
+      matches: (selector) => selector === 'a[href]' && Boolean(href),
+      querySelectorAll: (selector) => (selector === 'a[href]' ? links : []),
+      getBoundingClientRect: () => rect(top),
+      parentElement: null,
+    })
+    const cards = [
+      card({ text: 'post one', href: 'https://example.com/p/1' }),
+      card({ text: 'post two' }),
+      card({ text: '' }),
+      card({ text: 'post four', links: [card({ href: 'https://example.com/p/4' })] }),
+      card({ text: 'below', href: 'https://example.com/p/5', top: 2000 }),
+    ]
+    const collect = withPage(collectSrc, {
+      document: { querySelectorAll: () => cards },
+      innerHeight: 800,
+      innerWidth: 1200,
+    })
+    const snapshot = collect('[data-card]', 'auto')
+    assert.equal(snapshot.matched, 5, 'feed collect lost a matched element')
+    assert.equal(snapshot.unkeyed, 1, 'feed collect did not skip an unkeyed placeholder')
+    assert.deepEqual(
+      snapshot.items.map((item) => item.key),
+      ['https://example.com/p/1', 'post two', 'https://example.com/p/4', 'https://example.com/p/5'],
+      'feed collect keys are not href-else-text',
+    )
+    assert.deepEqual(snapshot.items.map((item) => item.visible), [true, true, true, false], 'feed collect visibility is not viewport-based')
+    assert.deepEqual(snapshot.items[0].box, { x: 0, y: 0, width: 300, height: 100 }, 'feed collect lost the item box')
+    assert.equal(collect('[data-card]', 'text').items[0].keySource, 'text', 'dedupeBy:"text" did not prefer text')
+    const scroller = { clientHeight: 400, scrollHeight: 2000, scrollTop: 0, scrollBy: (_x, y) => { scroller.scrollTop += y } }
+    const nestedCard = card({ text: 'nested' })
+    nestedCard.parentElement = scroller
+    const scroll = withPage(scrollSrc, {
+      window: { scrollY: 0, scrollBy: () => { throw new Error('window scroller used for a nested feed') } },
+      document: { documentElement: { scrollHeight: 5000, scrollTop: 0 }, querySelector: () => nestedCard },
+      innerHeight: 800,
+      getComputedStyle: (node) => ({ overflowY: node === scroller ? 'auto' : 'visible' }),
+    })
+    const moved = scroll('[data-card]')
+    assert.equal(moved.scroller, 'ancestor', 'feed scroll did not find the nested scroller')
+    assert.equal(moved.step, 320, 'feed scroll did not step 0.8 of the scroller height')
+    assert.equal(moved.scrolled, true, 'feed scroll did not move the nested scroller')
+    assert.ok(!/\.textContent/.test(collectSrc), 'feed text falls back past innerText')
+    assert.ok(/keySource/.test(collectSrc) && /visible: inView/.test(collectSrc) && /box: \{ x: Math\.round/.test(collectSrc), 'feed items lost key/text/visible/box')
+    assert.ok(/window\.scrollBy\(0,/.test(scrollSrc) && /innerHeight \* 0\.8/.test(scrollSrc), 'feed scroll no longer steps 0.8 of a viewport through the page scroller')
+    assert.ok(/scrollTop/.test(scrollSrc) && /scrollHeight/.test(scrollSrc), 'feed scroll cannot find a nested scroller')
+    assert.ok(/duplicatesDropped/.test(mergeSrc) && /recycled/.test(mergeSrc) && /previousKeys/.test(mergeSrc), 'feed merge lost its dedupe/recycle counters')
+    assert.ok(/forceActive\(tabId, \{ mode: 'hold' \}\)/.test(feedBody), 'feed no longer holds the lifecycle for a hidden tab on request')
+    assert.ok(/releaseActive\(tabId\)/.test(feedBody) && /!wasHeld/.test(feedBody), 'feed can release a hold it did not start')
+    assert.ok(/await delay\(500 \+ Math\.floor\(Math\.random\(\) \* 200\)\)/.test(feedBody), 'feed no longer waits 500-700 ms per scroll step')
+    assert.ok(/'max-items'/.test(feedBody) && /'until'/.test(feedBody) && /'no-growth'/.test(feedBody) && /'end-of-scroll'/.test(feedBody), 'the feed reason set is incomplete')
+    assert.ok(/count: state\.items\.length/.test(feedBody), 'feed count is no longer the returned item count')
+    assert.ok(/noGrowth >= 3/.test(feedBody), 'feed no longer stops after 3 steps with no new items')
+    assert.ok(/scrolls \+= 1/.test(feedBody), 'feed no longer counts scroll steps')
+    assert.ok(/dedupeBy must be "auto", "href" or "text"/.test(feedBody), 'feed no longer rejects an unknown dedupeBy')
+
+    // Wiring: dispatcher, schema, forwarding and the embedded page-side resolver.
+    assert.ok(/case 'feed': return feedPage\(params\)/.test(workerSource), 'the worker dispatcher lost the feed command')
+    assert.ok(/resolveRedirectHref\.toString\(\)/.test(workerSource), 'rows mode no longer embeds the redirect resolver')
+    assert.ok(/bridge\.send\('feed'/.test(toolsSource), 'bsb_read no longer sends the feed command')
+    assert.ok(/enum: \['text', 'rows', 'html', 'feed'\]/.test(toolsSource), 'bsb_read does not offer the feed mode')
+    assert.ok(
+      /maxItems: \{ type: 'number'/.test(toolsSource)
+      && /scroll: \{ type: 'boolean'/.test(toolsSource)
+      && /dedupeBy: \{ type: 'string', enum: \['auto', 'href', 'text'\]/.test(toolsSource),
+      'bsb_read feed schema lost maxItems/scroll/dedupeBy',
+    )
+    assert.ok(/until: \{ type: 'string'/.test(toolsSource) && /forceActive: \{ type: 'boolean'/.test(toolsSource), 'bsb_read feed schema lost until/forceActive')
+    assert.ok(/resolve: \{ type: 'boolean'/.test(toolsSource) && /resolve: args\?\.resolve === true/.test(toolsSource), 'bsb_read rows schema lost resolve or stops forwarding it')
+    assert.ok(/renderFeed/.test(toolsSource), 'bsb_read feed mode lost its renderer')
+    const feedSkill = await readFile(new URL('../skill/browser-bridge/SKILL.md', import.meta.url), 'utf8')
+    assert.ok(
+      /mode:"feed"/.test(feedSkill) && /resolve:true/.test(feedSkill) && /resolvableBy/.test(feedSkill),
+      'the skill no longer documents feed mode and redirect resolution',
+    )
+  }
+  console.log('ok  feed collection and redirect-resolution guards pinned (dedupe, recycle, cap, reasons, decode, navigation marker)')
 
   // The friction ledger belongs to the maintainer workspace, not the public
   // plugin. Check it when present so both layouts pass.
@@ -915,7 +1135,7 @@ try {
     'DOM.describeNode', 'DOM.enable', 'DOM.getBoxModel', 'DOM.getDocument', 'DOM.getFrameOwner',
     'DOM.querySelector', 'DOM.setFileInputFiles',
     'Emulation.clearDeviceMetricsOverride',
-    'Input.dispatchDragEvent', 'Input.dispatchKeyEvent', 'Input.dispatchMouseEvent',
+    'Input.dispatchDragEvent', 'Input.dispatchKeyEvent', 'Input.dispatchMouseEvent', 'Input.insertText',
     'Log.enable', 'Log.entryAdded',
     'Network.disable', 'Network.enable', 'Network.getResponseBody',
     'Network.loadingFailed', 'Network.loadingFinished', 'Network.requestWillBeSent', 'Network.responseReceived',
@@ -925,6 +1145,10 @@ try {
     // navigation would not, and it is the only way to reload an extension page
     // (F5 is a browser accelerator that never reaches the renderer).
     'Page.javascriptDialogOpening', 'Page.loadEventFired', 'Page.navigate', 'Page.reload',
+    // File-chooser interception is how upload reaches an input whose frame
+    // document the tab cannot read: the browser reports the input's backend node
+    // id, so no selector ever runs inside that document.
+    'Page.fileChooserOpened', 'Page.setInterceptFileChooserDialog',
     'Page.screencastFrame', 'Page.screencastFrameAck', 'Page.startScreencast', 'Page.stopScreencast',
     'Runtime.consoleAPICalled', 'Runtime.enable', 'Runtime.evaluate', 'Runtime.exceptionThrown',
     // Reviewed for the forceActive escape hatch. They are the two overrides the
@@ -1050,6 +1274,114 @@ try {
   assert.ok(/installOnNewDocument/.test(toolsSource) && /addScriptToEvaluateOnNewDocument/.test(workerSource), 'bsb_eval lost document-start injection')
   assert.ok(/const tracked = this\.activeBrowserId/.test(bridgeSource), 'browser resolution no longer prefers the tracked target')
   console.log('ok  CaptchaWare-run guards pinned (wheel, key text, frames, type, injection, browser default)')
+
+  // Input-truth guards from the Docs, Sheets and Facebook tickets. Each field
+  // below exists because its absence let a reply say "applied" while nothing
+  // landed: text was cut at a silent cap, focus drifted to another control, a
+  // chord lost its modifiers, or a text click contradicted the read that had
+  // just returned the same string.
+  {
+    const bodyFrom = (name) => {
+      const start = workerSource.indexOf('async function ' + name + '(')
+      assert.ok(start > 0, 'extension/sw.js lost ' + name)
+      const next = workerSource.indexOf('\nasync function ', start + 1)
+      return workerSource.slice(start, next > start ? next : workerSource.length)
+    }
+    // 2202: the cap is higher, a cut run is marked, and a run into an editor is
+    // verified against the document text it was supposed to change.
+    assert.ok(/const KEY_TEXT_CAP = 5000/.test(workerSource), 'key text cap is not 5000 characters')
+    const keyBody = bodyFrom('keyPage')
+    for (const field of ['requestedKeys', 'sentKeys', 'droppedKeys', 'truncated']) {
+      assert.ok(keyBody.includes(field), 'key text reply lost ' + field)
+    }
+    assert.ok(
+      /keyTextVerification/.test(keyBody) && /EDITOR_LOST_TEXT/.test(workerSource) && /TEXT_NOT_APPLIED/.test(workerSource),
+      'key text is no longer verified against the editor text',
+    )
+    assert.ok(
+      /textLenBefore/.test(workerSource) && /textLenAfter/.test(workerSource) && /excerpt/.test(workerSource),
+      'key text verification lost its before/after lengths or the excerpt',
+    )
+    assert.ok(
+      /document\.activeElement/.test(workerSource) && /tag !== 'body'/.test(workerSource),
+      'key text verification no longer keys off the focused element and skips a body/canvas page',
+    )
+    assert.ok(/const inView = Boolean\(rect\)/.test(workerSource), 'key text verification no longer skips an offscreen key shim')
+    // 2212: a modifier named in keys is a real chord, not three bare keys.
+    assert.ok(/function chordPlan/.test(workerSource) && /MODIFIER_KEY_BITS/.test(workerSource), 'keys:[...] lost its chord planner')
+    assert.ok(/Control: \{ key: 'Control', code: 'ControlLeft'/.test(workerSource), 'bare modifier names are refused again')
+    assert.ok(/modifiers: chordMask/.test(keyBody), 'a key reply does not report the chord mask')
+    assert.ok(/eventFor\(step\.spec, 'keyDown', step\.mask\)/.test(workerSource), 'a chord key event lost its mask')
+    // 2210: type names the element that actually holds focus and reports what
+    // the field and the focus were after the write.
+    const typeBody = bodyFrom('typePage')
+    const editable = workerSource.slice(
+      workerSource.indexOf('async function requireEditableTarget'),
+      workerSource.indexOf('function typedValueDidNotLand'),
+    )
+    assert.ok(/NOT_FOCUSED/.test(editable), 'type no longer fails NOT_FOCUSED when focus lands elsewhere')
+    assert.ok(/describeActiveElement/.test(editable), 'the NOT_FOCUSED error does not name the active element')
+    for (const field of ['activeElement', 'valueAfter', 'activeElementAfter']) {
+      assert.ok(typeBody.includes(field), 'type reply lost ' + field)
+    }
+    // 2216: a text click that finds no hittable node names its candidates.
+    const findBody = workerSource.slice(
+      workerSource.indexOf('async function findTextPoint'),
+      workerSource.indexOf('async function pressAt'),
+    )
+    assert.ok(/TEXT_NOT_CLICKABLE/.test(workerSource), 'click by text no longer fails with TEXT_NOT_CLICKABLE')
+    assert.ok(/textCandidatesExpr/.test(findBody), 'click by text does not gather candidates on a miss')
+    for (const field of ['candidates', 'pointerEvents', 'ariaHidden']) {
+      assert.ok(workerSource.includes(field), 'click candidate diagnostics lost ' + field)
+    }
+    // 2213: an opt-in click postcondition says whether anything changed.
+    const clickBody = bodyFrom('clickPage')
+    assert.ok(/PAGE_FINGERPRINT_EXPR/.test(workerSource) && /pageChanged/.test(clickBody), 'click verify lost its page fingerprint')
+    assert.ok(/CLICK_UNCHANGED_HINT/.test(clickBody), 'a verified click that changed nothing lost its hint')
+    assert.ok(/const verify = args\?\.verify === true/.test(toolsSource), 'bsb_act does not accept verify')
+    assert.ok(/verify, forceActive/.test(toolsSource), 'bsb_act does not forward verify on click')
+    assert.ok(/verify: \{ type: 'boolean'/.test(toolsSource), 'bsb_act does not document verify')
+    // The skill documents every new field and error.
+    const skillText = await readFile(new URL('../skill/browser-bridge/SKILL.md', import.meta.url), 'utf8')
+    for (const needle of ['TEXT_NOT_APPLIED', 'EDITOR_LOST_TEXT', 'NOT_FOCUSED', 'TEXT_NOT_CLICKABLE', 'pageChanged', 'requestedKeys', 'droppedKeys', 'activeElement']) {
+      assert.ok(skillText.includes(needle), 'the skill does not document ' + needle)
+    }
+  }
+  console.log('ok  input-truth guards pinned (key text cap/verify, chords, type focus, click candidates/verify)')
+  // Transfer features from the 2155/2147 tickets. Upload must be able to attach
+  // files to a chooser whose frame document it never reads; paste must be a real
+  // clipboard paste or an honest Input.insertText, never a synthetic event or
+  // DOM injection. These are static guards only: the live behavior needs a real
+  // Chrome with the patched extension loaded.
+  {
+    assert.ok(/async function fileChooserUpload\(/.test(workerSource), 'sw.js lost the file-chooser upload route')
+    assert.ok(/Page\.setInterceptFileChooserDialog/.test(workerSource), 'upload no longer arms chooser interception')
+    assert.ok(/Page\.fileChooserOpened/.test(workerSource), 'upload no longer waits for the chooser event')
+    assert.ok(/DOM\.setFileInputFiles', \{ backendNodeId: event\.backendNodeId/.test(workerSource),
+      'upload no longer sets files by the reported backendNodeId')
+    assert.ok(/via: 'fileChooser'/.test(workerSource), 'upload no longer reports via:"fileChooser"')
+    const frameUploadError = workerSource.slice(
+      workerSource.indexOf('if (!rootNodeId) {'),
+      workerSource.indexOf('const selector = resolveTarget(target)', workerSource.indexOf('if (!rootNodeId) {')),
+    )
+    assert.ok(/x,y/.test(frameUploadError) && /top-document target/.test(frameUploadError),
+      'the unreachable-frame error no longer names the x,y / top-document trigger route')
+    assert.ok(/let handled = false/.test(workerSource) && /cancel: true/.test(workerSource),
+      'upload can leave file chooser interception armed')
+    assert.ok(/async function pastePage\(/.test(workerSource), 'sw.js lost the paste action')
+    assert.ok(/navigator\.clipboard/.test(workerSource) && /writeText/.test(workerSource), 'paste no longer writes the clipboard')
+    assert.ok(/commands: \['paste'\]/.test(workerSource), 'paste no longer sends the browser paste edit command')
+    assert.ok(/Input\.insertText/.test(workerSource), 'paste lost the Input.insertText fallback')
+    assert.ok(/mode: 'clipboard'/.test(workerSource) && /mode: 'insertText'/.test(workerSource),
+      'paste does not report which mode it actually used')
+    assert.ok(/truncated/.test(workerSource) && /PASTE_MAX_CHARS/.test(workerSource), 'paste no longer reports truncation')
+    assert.ok(!/ClipboardEvent/.test(workerSource), 'paste dispatches a synthetic ClipboardEvent instead of real input')
+    assert.ok(/clipboardWrite/.test(JSON.stringify(manifest.permissions)), 'the extension cannot write the clipboard')
+    assert.ok(/enum: \[[^\]]*'paste'/.test(toolsSource), 'bsb_act does not offer the paste action')
+    assert.ok(/action === 'paste'/.test(toolsSource) && /action === 'upload'/.test(toolsSource), 'bsb_act lost an execute branch')
+    assert.ok(/chars, truncated, mode and applied/.test(toolsSource), 'bsb_act does not document the paste report')
+  }
+  console.log('ok  upload chooser and paste guards pinned (clipboard write, insertText fallback, no synthetic events)')
 
   // The skill and the tool surface are one model-facing contract.
   await import('./skill-align.mjs')

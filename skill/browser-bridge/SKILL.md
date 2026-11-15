@@ -21,8 +21,9 @@ http(s) URL and reports `autoNewTab` instead of failing.
 | Which browser/target | `bsb_browsers` |
 | Already-open page, reload, close | `bsb_tabs` (`list`/`use`/`reload`/`close`) |
 | New URL | `bsb_open` (background by default; `activate:true` to show) |
-| Read text / find controls / scrape rows / DOM | `bsb_read` (`text`/`rows`/`html`) |
-| Click, type, key, wheel, slider, drag, upload, game input | `bsb_act` |
+| Read text / find controls / scrape rows / DOM | `bsb_read` (`text`/`rows`/`html`/`feed`) |
+| Collect a virtualized feed once | `bsb_read` (`feed`, `scroll:true`) |
+| Click, type, paste, key, wheel, slider, drag, upload, game input | `bsb_act` |
 | Page state, canvas, geometry, authenticated fetch | `bsb_eval` |
 | Wait for load/enable/network/URL | `bsb_wait_for` |
 | Screenshot, burst, contact sheet, recording | `bsb_capture` |
@@ -40,12 +41,15 @@ http(s) URL and reports `autoNewTab` instead of failing.
    selector and get text/link/image/state/box per match. Use `html` for one
    element; avoid regex over raw HTML.
 3. **Act.** `bsb_act` does one action: `click` (`target`/`@eN`/`text`/`x,y`;
-   `targets` batch; `all`), `hover`, `type` (+`submit`), `set` (sliders,
-   framework-bound inputs), `select`, `key` (`holdMs`, `keys`, `text` to send
+   `targets` batch; `all`; `verify:true` for a page fingerprint before and
+   after), `hover`, `type` (+`submit`), `set` (sliders, framework-bound
+   inputs), `select`, `key` (`holdMs`, `keys` as a real chord, `text` to send
    one real key event per character, `steps` for timed sequences,
    `measure`/`settle` for canvas games), `scroll`, `wheel`, `drag` (with
-   `path` for sliders/maps), `drop`, `upload`, `drive`/`measure` (canvas
-   steering/state), `forceActive`/`releaseActive` (page-lifecycle override).
+   `path` for sliders/maps), `drop`, `upload` (a file input, or `x,y` over
+   the control that opens the chooser), `paste` (clipboard-backed, see Forms),
+   `drive`/`measure` (canvas steering/state), `forceActive`/`releaseActive`
+   (page-lifecycle override).
 4. **Wait properly.** After a click that loads or animates, use `bsb_wait_for`
    (`selector`, `text`, `url`, `expression`, `network`), never `sleep`. For
    timed UIs, `firstSelector` presses then waits; `clickSelector` presses the
@@ -54,7 +58,14 @@ http(s) URL and reports `autoNewTab` instead of failing.
 5. **Verify.** Re-read, `bsb_eval` the state, or `bsb_capture` the region. Do not
    assume a click landed just because no error came back. `bsb_read` returns a
    `state:` line and a `hint:` for an error page, an interstitial or a splash
-   skeleton.
+   skeleton. For a menu, grid or canvas control, pass `verify:true` to the click:
+   the reply then carries `pageChanged` and, when nothing moved, a `hint` that
+   the press may not have landed. When `click {text:"..."}` finds no hittable
+   node it fails `TEXT_NOT_CLICKABLE` with a `reason` and up to five
+   `candidates:[{selector, tag, box, visible, pointerEvents, ariaHidden}]`, which
+   is how a string returned by `bsb_read` but painted by a zero-size,
+   `pointer-events:none` or `aria-hidden` node stays clickable: press a candidate
+   box with `click x,y` or the nearest clickable ancestor.
 
 ## Navigation truth and page state
 
@@ -99,6 +110,76 @@ whose app never booted. The replies now carry that difference.
   when the empty text is really an error page, an interstitial or an unrendered
   splash. Empty text with a large DOM or a full-viewport splash is a render
   problem, not an empty page.
+- The navigation error is per-tab and is the **last** navigation, not a
+  history: a later successful navigation in the same tab replaces it. So a
+  `hint: navigation failed ...` line is only printed while the current document
+  really is a failed one (`chrome-error:`, a 4xx/5xx document). If the reply
+  shows `state: complete`, `HTTP 200` and a real body, there is no stale failed
+  navigation behind it; do not re-open the URL because of an old error.
+- No content verdict is asserted before `readyState` is `complete`: while a
+  document is `loading` or `interactive` the hint says
+  `document still loading ... no content verdict yet` instead of calling 0
+  chars and 0 elements an interstitial. At `complete`, the WAF/empty-shell hint
+  (for example 14 chars, 15 elements, HTTP 200) still fires. Read again when the
+  state line says `complete`.
+
+## Eval targeting
+
+- `bsb_eval` replies echo `tabId`, `url`, `world` (`isolated`|`main`) and
+  `visibility`, so a reply says which tab and world answered. Keep them when
+  several tabs are open: a value without a target cannot be trusted.
+- An expression that returns `undefined` reports `result: null` with
+  `undefined: true`, never a bare `{}`. `{}` means the expression really
+  produced an empty object.
+- An explicit `tabId` must be an open, scriptable tab. A missing or
+  `chrome://` target fails with `TAB_NOT_EVALUABLE` naming the tab; a hidden
+  tab whose page cannot be evaluated fails with `TAB_NOT_VISIBLE`. Both name
+  the recovery: `bsb_tabs {action:"use", tabId:<id>}` to re-attach or bring it
+  forward, or `forceActive:true` (or `bsb_act forceActive mode:"hold"`) when
+  the page only needs a live frame clock.
+- `frame` plus `world:"main"` is refused with `UNSUPPORTED`: the main world is
+  only addressable for the top frame. Use the default read-only isolated world
+  for a frame, or `bsb_open` the frame URL directly.
+- The default isolated world is guarded before the expression runs; if the
+  read-only guard cannot be installed, the call fails instead of evaluating
+  unguarded.
+
+## Feeds and redirect resolution
+
+- `bsb_read {mode:"feed", selector:"[role=article]", maxItems:20, scroll:true,
+  dedupeBy:"auto", until:"...", forceActive:true}` collects a virtualized list
+  in one call. Each item carries a stable `key` (the href when there is one,
+  otherwise the normalized text, cut at 240 characters), `keySource`, `text`,
+  `href`, `visible` and `box`. With `scroll:true` it drives the page's own
+  scroller (the window, or the nearest scrollable element at or above the first
+  match) by 0.8 of a viewport, waits 500-700 ms, and re-reads. Items are
+  deduplicated across steps and re-renders; collection stops at `maxItems`
+  (default 20, max 200), on a truthy `until` expression, after 3 consecutive
+  steps with no new items, or at the end of the scroller. `dedupeBy:"href"` or
+  `"text"` forces that key preference and falls back to the other.
+- The feed reply carries `items`, `count` (the items actually returned),
+  `scrolls`, `duplicatesDropped`, `recycled` (distinct collected keys that later
+  vanished from the DOM), `reason` (`max-items`, `until`, `no-growth`,
+  `end-of-scroll`), `matched` (elements matched on the final read), `unkeyed`
+  (matches with neither href nor visible text, so not items), and
+  `visibility`/`hidden`. `items: 0` with `unkeyed` above zero is placeholders or
+  a shell, not an empty feed; the reply adds a `hint` for that and for a hidden
+  tab. A non-scrolling read reports `reason:"no-growth"` after its single pass.
+- On a hidden tab feed mode forces nothing: it reads what the hidden page
+  renders and reports `hidden:true`. Pass `forceActive:true` to hold the page
+  lifecycle for the collection; the hold is released before the reply returns
+  (an existing hold is left alone) and `forced` reports `applied`, `reused`,
+  `released` and `cleared`.
+- `bsb_read {mode:"rows", href:true, resolve:true}` decodes a known redirector
+  href without navigating: `google.<tld>/url?q=` or `?url=`,
+  `google.<tld>/goto?url=<base64>` (standard or URL-safe, padded or not) and
+  `l.facebook.com/l.php?u=`. A decoded row gains `resolved:true`,
+  `hrefResolved` and `resolvableBy:"decoded"`; a known redirector that cannot be
+  decoded without following it (t.co, an opaque or non-URL payload) gains
+  `resolved:false` and `resolvableBy:"navigation"` with no invented URL. `href`
+  is unchanged. A row without those fields was not a known redirector, so its
+  `href` is already the target. Resolution is pure string decoding: no
+  navigation, no network request, no DOM change. `resolve` implies `href:true`.
 
 ## Visual work
 
@@ -171,8 +252,32 @@ whose app never booted. The replies now carry that difference.
 
 - `type` targets an input and verifies the value landed; `submit:true` presses
   Enter. `set` handles sliders/checkboxes and framework-bound inputs; `select`
-  chooses an option. `upload` takes local file paths; `drop` handles drag-drop
-  zones. JS dialogs during a read are auto-dismissed and reported.
+  chooses an option; `drop` handles drag-drop zones. JS dialogs during a read
+  are auto-dismissed and reported.
+- `upload` takes local file paths. Pass `target` when the file input itself is
+  in the top document, or `frame` plus `target` when it is in a frame the tab
+  can read. When the input sits in a cross-origin frame the tab cannot read,
+  pass `x,y` over the control that opens the chooser (or a top-document
+  `target` that opens it) and no `frame`: the worker arms
+  `Page.setInterceptFileChooserDialog`, presses for real, and attaches the
+  files with the `backendNodeId` reported by `Page.fileChooserOpened`. The
+  reply says `via:"fileChooser"`. This route dispatches a real press, so it
+  needs a visible tab (`forceActive:true` when hidden). The `frame`+`target`
+  path still works when the frame document is reachable, and its error tells
+  you to switch to `x,y` or a top-document trigger when it is not.
+- `paste` inserts text into the focused element in one call. By default it
+  writes the text to the OS clipboard (the extension holds `clipboardWrite`)
+  and sends a real Ctrl+V/Command+V whose key event carries Blink's `paste`
+  edit command, so Sheets explodes a TSV into cells and Docs takes a long
+  block in one shot. That replaces the clipboard contents. If the clipboard is
+  unavailable (older Chrome, no permission) it falls back to one CDP
+  `Input.insertText` run and reports `mode:"insertText"` with a note: that is
+  not a native paste, does not fire the page's paste handler, and does not
+  explode TSV. The reply carries `chars`, `truncated` (above 100000
+  characters), `mode` and `applied`. Click the field or cell first (or pass
+  `target`); to paste inside a frame, click the editor there first, the paste
+  goes to whatever is focused. `key` text mode stops at 1000 keys; paste does
+  not.
 
 ## Canvas and key-driven pages
 
@@ -181,12 +286,33 @@ whose app never booted. The replies now carry that difference.
   `display:none` or `visibility:hidden` target with `NOT_VISIBLE` and its box, so
   an offscreen measurer that happens to be `document.activeElement` (for example
   a Sheets `#waffle-rich-text-editor` parked at y=-9998) is not typed into: focus
-  the visible editor first by clicking the cell. After typing it reads the value
-  back and fails with `TYPE_NOT_APPLIED` when the write did not land. Use
-  `bsb_act action:"key" text:"..."` (one real keydown per character,
+  the visible editor first by clicking the cell. After focusing the target it
+  checks that `document.activeElement` really is that element or a descendant and
+  otherwise fails with `NOT_FOCUSED`, naming the element that holds focus (tag,
+  id, role, aria-label) and the target, so a name box that hands focus back to
+  the grid is visible immediately. After typing it reads the value back, fails
+  with `TYPE_NOT_APPLIED` when the write did not land, and the reply carries
+  `activeElement` and `valueAfter` (plus `activeElementAfter` with `submit:true`)
+  so the caller can see where the next keystroke will go.
+- Use `bsb_act action:"key" text:"..."` (one real keydown per character,
   `keyDelayMs` between them) for engines that read keys; `\t` is sent as Tab and
   `\n`/`\r` as Enter (the reply counts `tabs` and `enters`), while any other
   control character fails with `BAD_ARGUMENT` instead of being silently dropped.
+  A text run sends at most 5000 characters and reports `requestedKeys`,
+  `sentKeys`, `truncated` and `droppedKeys`, so a cut run is never mistaken for a
+  complete one. When the focused element is an input, textarea, contenteditable
+  or `role=textbox` editor, the run is verified against the visible document
+  text: a reply carries `textLenBefore`/`textLenAfter`, a run whose typed prefix
+  is absent fails `TEXT_NOT_APPLIED`, and a run that leaves the document shorter
+  fails `EDITOR_LOST_TEXT` even when the prefix is present (a replaced selection
+  is not reported as success). A canvas game whose active element is body, and a
+  hidden or offscreen key shim, are never subject to that check.
+- `keys:[...]` is a real chord: a modifier name in the list (`ControlLeft`,
+  `AltLeft`, `ShiftLeft`, `MetaLeft`, or the bare `Control`, `Alt`, `Shift`,
+  `Meta`) is held while the other keys fire, and the reply's `modifiers` reports
+  the mask that was applied. `modifiers:["Control","Alt"]` with a single `key`
+  still works and produces the same mask, so either spelling delivers
+  Ctrl+Alt+1.
 - `bsb_act action:"wheel"` sends a real wheel event at x/y for maps, zoom and
   panels that listen to `wheel` rather than `scroll`.
 - To run code before a page's own scripts (hook WebAssembly or fetch, patch a
@@ -203,6 +329,9 @@ whose app never booted. The replies now carry that difference.
 
 - Real accounts are production: navigate and read only. Never follow, like,
   comment, post, purchase, or save on the user's behalf unless explicitly asked.
+- `paste` replaces the OS clipboard with the text you pass; do not leave secrets
+  on the user's clipboard without saying so. `upload` with `x,y` presses for
+  real, so it needs a visible tab like every other input action.
 - `forceActive` is opt-in and never installed by default; release it when done.
   No tool raises, focuses, resizes or moves the browser window. `bsb_open` is
   background by default; `bsb_tabs use` fronts the tab unless `activate:false`.
@@ -231,13 +360,26 @@ whose app never booted. The replies now carry that difference.
 | --- | --- |
 | "No page is tracked" | `bsb_tabs list`, then `use`; or `bsb_open` |
 | `bsb_open` succeeded but the page is blank / 429 | read `documentUrl`, `httpStatus`, `navigationError`, `hint`; treat a chrome-error page as a failed navigation |
+| `bsb_read` hint says `navigation failed` but the state line is a healthy page | the cached error is stale; the hint is only for a failed current document, so trust `state` and do not retry the URL |
+| `bsb_read` hint says `document still loading` | no verdict yet; wait for `readyState: complete` (`bsb_wait_for` or read again) before judging the page |
+| `bsb_eval` on another tab returns no value / a typed target error | read `tabId`, `url`, `world`, `visibility` in the reply (or `TAB_NOT_EVALUABLE`/`TAB_NOT_VISIBLE`); `bsb_tabs use` the tab, or pass `forceActive:true` for a paused page, then retry |
+| `bsb_eval` keeps returning `{}` after an update | `undefined` is reported as `undefined:true`; a bare `{}` means an old extension worker answered, update the extension or re-eval with an explicit `tabId` |
 | Page hidden / input refused (`TAB_NOT_VISIBLE`) | `bsb_act forceActive` (`hold` for a session, or `forceActive:true` for one action), then retry; release after |
 | `activate:true` did not make the page visible | read `reason`; a minimized window stays hidden, restore it yourself |
 | Element not found | `bsb_read` text, check shadow/iframe, wait for it (`bsb_wait_for`) |
 | Wait matched a hidden node | prefer `visible:true`; read `matchedVisibility`/`matchedBox` |
-| Click did nothing | enable/stable wait, scroll into view, try `@eN`, check overlay/iframe |
+| Click did nothing | enable/stable wait, scroll into view, try `@eN`, check overlay/iframe; retry with `verify:true` and read `pageChanged`/`hint` |
+| Click by text says the text is absent | read `reason` and `candidates`: a zero-size, `pointer-events:none` or `aria-hidden` node holds the text. Press a candidate box or its nearest clickable ancestor |
 | Typing lost / `TYPE_NOT_APPLIED` | read the value back; check the target is the visible editor, not an offscreen measurer; `submit`; check masks/framework setter |
+| `NOT_FOCUSED` on type | read `activeElement`: the page moved focus elsewhere (a name box handing focus to the grid, an overlay, a disabled field). Click the target again and check it is not covered |
+| Key text absent or `EDITOR_LOST_TEXT` | read `textLenBefore`/`textLenAfter` and the excerpt: the run did not land or the editor ate the selection. Re-read the page before retrying |
+| Long `key text` run lost its tail | read `truncated`/`droppedKeys`: the cap is 5000 characters per call. Send the rest in a second call |
+| `keys:[...]` shortcut did not fire | read `modifiers` in the reply; a chord that was not delivered reports `modifiers:0`. Use `keys` with modifier names or `key` plus `modifiers:["Control"]` |
+| Paste inserted nothing | click the field or cell first (or pass `target`); read `mode` and the note: `insertText` is not a native paste; front the tab so the browser paste command is enabled |
+| `upload` cannot reach the frame | the cross-origin chooser route is disabled (it crashed the renderer); set files on a top-document `<input type="file">` with `target`, or on a reachable frame input. Do not use `x,y` |
 | Canvas has no text | `bsb_eval`, `bsb_pixels`, `bsb_capture`; map canvas coordinates |
+| Feed read returns few or 0 items | read `reason`, `matched` and `unkeyed`; a hidden tab needs `forceActive:true`, placeholders need a better selector, and `scroll:true` is what collects beyond one viewport |
+| Result links are `/goto?url=`, `/url?q=` or `t.co` | `bsb_read rows resolve:true`; `resolvableBy:"navigation"` means open the link to learn its target |
 | CAPTCHA / image puzzle | capture or pixels, solve, then click cells; verify before submit |
 | Network request fails | repeat it with `bsb_eval` fetch inside the page (cookies) |
 | 0×0 layout viewport | restore the window; tools will not raise it. A minimized window with a normal layout viewport still captures and reports `hidden` |

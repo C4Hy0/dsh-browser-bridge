@@ -123,6 +123,38 @@ function renderRead(_args, value) {
 }
 
 /**
+ * Render a feed collection: the sample shape first, then one compact line per
+ * item. The shape line is what separates "empty feed" from "never rendered",
+ * so it stays above the items even when the list is long.
+ */
+function renderFeed(_args, value) {
+  const items = Array.isArray(value?.items) ? value.items : []
+  const shape = [
+    `${items.length} items`,
+    `reason: ${value?.reason ?? 'unknown'}`,
+    `${value?.scrolls ?? 0} scrolls`,
+    `${value?.duplicatesDropped ?? 0} duplicates dropped`,
+    `${value?.recycled ?? 0} recycled`,
+  ]
+  const forced = value?.forced
+    ? ` · lifecycle held for this call${value.forced.released ? ' and released' : ''}`
+    : ''
+  const lines = [
+    `feed ${JSON.stringify(value?.selector ?? '')} · ${shape.join(' · ')}`,
+    `url: ${value?.url ?? ''}`,
+    `state: ${value?.visibility ?? 'unknown'}${value?.hidden ? ' (hidden)' : ''}${forced}`,
+    `matched: ${value?.matched ?? 0} elements on the final read, ${value?.unkeyed ?? 0} without a key` +
+      (value?.untilError ? ` · until error: ${value.untilError}` : ''),
+    ...(value?.hint ? [`hint: ${value.hint}`] : []),
+    ...items.map((item, index) => {
+      const label = item?.keySource === 'text' ? item.key : (item?.text || '(no text)')
+      return `${index + 1}. ${item?.visible ? 'visible' : 'offscreen'} ${JSON.stringify(String(label ?? '').slice(0, 120))}${item?.href ? ` → ${item.href}` : ''}`
+    }),
+  ]
+  return [textBlock(lines.join('\n'))]
+}
+
+/**
  * Render the tab list: the real document URL, the requested URL when it differs,
  * and a marker for a failed navigation or a non-scriptable browser page.
  */
@@ -422,7 +454,7 @@ export function registerTools(ctx, bridge) {
   register({
     name: 'bsb_eval',
     description:
-      'Evaluate JavaScript in the tracked page (or a child frame) and return the value. Use when bsb_read cannot describe the state: canvas/WebGL, geometry or computed style, a page-authenticated fetch, or framework internals. The isolated world (default) is read-only over DOM and page HTTP; world "main" sees Vue __vue__, React fibers and closures, and can write. If the expression returns a Promise, pass awaitPromise:true; without it the call fails with PROMISE_RESULT instead of silently returning {}.',
+      'Evaluate JavaScript in the tracked page (or a child frame) and return the value. Use when bsb_read cannot describe the state: canvas/WebGL, geometry or computed style, a page-authenticated fetch, or framework internals. The isolated world (default) is read-only over DOM and page HTTP; world "main" sees Vue __vue__, React fibers and closures, and can write. If the expression returns a Promise, pass awaitPromise:true; without it the call fails with PROMISE_RESULT instead of silently returning {}. The reply echoes tabId, url, world and visibility so it names the tab and world that answered. An expression that returns undefined reports undefined:true instead of an empty object; a target that cannot be evaluated fails with TAB_NOT_EVALUABLE or TAB_NOT_VISIBLE naming the tab, the reason and the recovery (bsb_tabs use, forceActive). frame + world:"main" is refused because the main world is only addressable for the top frame.',
     parameters: input({
       expression: { type: 'string', description: 'Expression to evaluate, e.g. "document.title".' },
       awaitPromise: { type: 'boolean', description: 'Await a returned promise. Required for promise-valued expressions; without it the call fails with PROMISE_RESULT instead of returning {}.' },
@@ -435,9 +467,29 @@ export function registerTools(ctx, bridge) {
       saveTo: { type: 'string', description: 'Write the result JSON to this path and return a short receipt. Large results spill to /tmp/bsb-eval-<stamp>.json automatically.' },
       browser: browserProperty,
     }, []),    output: {
-      schema: { type: 'object', properties: { result: {}, world: { type: 'string' }, frameId: { type: 'string' }, url: { type: 'string' }, saved: { type: 'string' }, bytes: { type: 'number' }, preview: { type: 'string' } } },
+      schema: {
+        type: 'object',
+        properties: {
+          result: {},
+          tabId: { type: 'number' },
+          url: { type: 'string' },
+          world: { type: 'string' },
+          visibility: { type: 'string' },
+          undefined: { type: 'boolean' },
+          frameId: { type: 'string' },
+          saved: { type: 'string' },
+          bytes: { type: 'number' },
+          preview: { type: 'string' },
+        },
+      },
       render: (_a, v) => (v?.saved
-        ? [textBlock('eval result saved (' + v.bytes + ' bytes) → ' + v.saved + '\nopen it with read, or narrow the expression to get it inline.\npreview: ' + String(v.preview ?? '').slice(0, 400))]
+        ? [textBlock(
+            'eval result saved (' + v.bytes + ' bytes) → ' + v.saved
+            + '\nopen it with read, or narrow the expression to get it inline.'
+            + (typeof v.tabId === 'number' ? '\ntarget: tab ' + v.tabId + (v.url ? ' - ' + v.url : '') + ' · world ' + (v.world ?? 'unknown') + ' · visibility ' + (v.visibility ?? 'unknown') : '')
+            + (v.undefined === true ? '\nresult: undefined' : '')
+            + '\npreview: ' + String(v.preview ?? '').slice(0, 400),
+          )]
         : jsonRender(v)),
     },
     timeoutMs: TIMEOUT_MS,
@@ -486,6 +538,9 @@ export function registerTools(ctx, bridge) {
       }
       if (typeof raw?.world === 'string') receipt.world = raw.world
       if (typeof raw?.url === 'string') receipt.url = raw.url
+      if (typeof raw?.tabId === 'number') receipt.tabId = raw.tabId
+      if (typeof raw?.visibility === 'string') receipt.visibility = raw.visibility
+      if (raw?.undefined === true) receipt.undefined = true
       return receipt
     },
   })
@@ -1061,17 +1116,17 @@ export function registerTools(ctx, bridge) {
   register({
     name: 'bsb_act',
     description:
-      'Perform ONE input action. Use for every click, keystroke, drag, slider, scroll, file upload and canvas-game input. click: target|@eN|text|x,y (+count, all, targets, button). hover: target|text|x,y. type: target+text (+submit); it refuses a zero-size, offscreen or hidden target instead of reporting an empty write, and verifies the value after typing. set: target+value|checked (sliders, framework-bound inputs). select: target+value|label|index. key: key|keys+modifiers (+holdMs, steps for timed UIs, measure/settle for canvas state). drive: x,y in GAME coordinates or route[] - closed-loop steering of a canvas sprite. measure: read-only canvas sprite state. forceActive: opt-in wake of a hidden or paused page; hold with mode "hold" until releaseActive. scroll, drag (+path), drop, upload, wheel (x,y + deltaX/deltaY). Input actions (click, hover, type, key, drag, drop, wheel) fail with TAB_NOT_VISIBLE on a hidden page: nothing is sent and nothing replays, unless forceActive:true is passed for that action; scroll, set, select and upload still work because they dispatch no input. key accepts text to send each character as a real key event (+keyDelayMs); "\\t" is sent as Tab, "\\n"/"\\r" as Enter, and other control characters fail with BAD_ARGUMENT; the reply counts tabs and enters. x/y are viewport CSS px unless the action says game coordinates.',
+      'Perform ONE input action. Use for every click, keystroke, paste, drag, slider, scroll, file upload and canvas-game input. click: target|@eN|text|x,y (+count, all, targets, button, verify). hover: target|text|x,y. type: target+text (+submit); it refuses a zero-size, offscreen or hidden target instead of reporting an empty write, verifies the value after typing, reports activeElement/valueAfter (and activeElementAfter with submit), and fails NOT_FOCUSED when focus landed elsewhere. paste: text into the focused element (target focuses one first); by default it writes the text to the OS clipboard and sends a real Ctrl+V/Command+V paste command, so TSV explodes into spreadsheet cells and a long block lands in one call, at the cost of replacing the clipboard contents. When the clipboard is unavailable it falls back to one CDP Input.insertText run and reports mode:"insertText", which is not a native paste and does not explode TSV; the reply carries chars, truncated, mode and applied. Paste is not limited to key text mode\'s 1000-key cap: text above 100000 characters is truncated and reported with truncated:true. set: target+value|checked (sliders, framework-bound inputs). select: target+value|label|index. key: key|keys+modifiers (+holdMs, steps for timed UIs, measure/settle for canvas state). keys with modifier names (ControlLeft, AltLeft, ShiftLeft, MetaLeft, Control, Alt, Shift, Meta) is a real chord: the mask is applied to the main key and reported in modifiers. drive: x,y in GAME coordinates or route[] - closed-loop steering of a canvas sprite. measure: read-only canvas sprite state. forceActive: opt-in wake of a hidden or paused page; hold with mode "hold" until releaseActive. scroll, drag (+path), drop, upload, wheel (x,y + deltaX/deltaY). upload takes target (a top-document file input) or frame plus target for a reachable frame input; the cross-origin chooser route is disabled because it crashed the renderer on live tests. Input actions (click, hover, type, paste, key, drag, drop, wheel) fail with TAB_NOT_VISIBLE on a hidden page: nothing is sent and nothing replays, unless forceActive:true is passed for that action; scroll, set and select still work because they dispatch no input, and so does upload when target is itself a file input. key accepts text to send each character as a real key event (+keyDelayMs); "\\t" is sent as Tab, "\\n"/"\\r" as Enter, and other control characters fail with BAD_ARGUMENT; the reply counts tabs and enters, sends up to 5000 characters and reports requestedKeys/sentKeys/truncated/droppedKeys. When the focused element is an editor, a key text run is verified and fails TEXT_NOT_APPLIED or EDITOR_LOST_TEXT with textLenBefore/textLenAfter and an excerpt. click text that finds no hittable node fails TEXT_NOT_CLICKABLE with a reason, candidates and their boxes. click verify:true reports pageChanged and a hint when the page fingerprint did not move. x/y are viewport CSS px unless the action says game coordinates.',
     parameters: input({
       action: {
         type: 'string',
-        enum: ['click', 'hover', 'type', 'set', 'select', 'key', 'drive', 'measure', 'scroll', 'drag', 'drop', 'upload', 'wheel', 'forceActive', 'releaseActive'],
+        enum: ['click', 'hover', 'type', 'paste', 'set', 'select', 'key', 'drive', 'measure', 'scroll', 'drag', 'drop', 'upload', 'wheel', 'forceActive', 'releaseActive'],
         description: 'Which input action to perform.',
       },
-      target: { type: 'string', description: '@eN from bsb_read, or a CSS selector.' },
-      text: { type: 'string', description: 'Visible label (click/hover), the text to type, or (key) characters to send as real key events. In key text mode "\\t" is Tab, "\\n" and "\\r" are Enter, and any other control character fails with BAD_ARGUMENT.' },
-      x: { type: 'number', description: 'Viewport CSS x (game coordinate for drive).' },
-      y: { type: 'number', description: 'Viewport CSS y (game coordinate for drive).' },
+      target: { type: 'string', description: '@eN from bsb_read, or a CSS selector. upload: a file input, or a top-document control that opens the file chooser. paste: an editable to focus first.' },
+      text: { type: 'string', description: 'Visible label (click/hover), the text to type, (key) characters to send as real key events, or (paste) the exact text to insert, kept untrimmed so tabs and newlines survive. In key text mode "\\t" is Tab, "\\n" and "\\r" are Enter, and any other control character fails with BAD_ARGUMENT.' },
+      x: { type: 'number', description: 'Viewport CSS x (game coordinate for drive; upload: the point that opens the file chooser).' },
+      y: { type: 'number', description: 'Viewport CSS y (game coordinate for drive; upload: the point that opens the file chooser).' },
       deltaX: { type: 'number', description: 'wheel: horizontal delta (about 100 per notch).' },
       deltaY: { type: 'number', description: 'wheel: vertical delta (negative scrolls down).' },
       toTarget: { type: 'string', description: 'drag: drop target.' },
@@ -1092,10 +1147,11 @@ export function registerTools(ctx, bridge) {
       index: { type: 'number', description: 'select: option index.' },
       selector: { type: 'string', description: 'scroll: element to bring into view.' },
       key: { type: 'string', description: 'key: "Enter", "ArrowRight", "Escape", or one letter/digit.' },
-      keys: { type: 'array', items: { type: 'string' }, description: 'key: keys held together.' },
+      keys: { type: 'array', items: { type: 'string' }, description: 'key: keys pressed as one chord. A modifier name here (ControlLeft, AltLeft, ShiftLeft, MetaLeft, or Control/Alt/Shift/Meta) sets the real modifier mask on the other keys and the reply reports it in modifiers.' },
       modifiers: { type: 'array', items: { type: 'string' }, description: 'key: Alt, Control, Meta, Shift.' },
       holdMs: { type: 'number', description: 'key/click/drag: hold time in ms, 0-10000. On click it keeps the button down (hold-to-mine); ignored for count>1.' },
       keyDelayMs: { type: 'number', description: 'key with text: pause between characters in ms (default 40, 8-500).' },
+      verify: { type: 'boolean', description: 'click: snapshot a cheap page fingerprint (URL, title, element count, body text length, focused element) before and after, and return pageChanged plus a hint when nothing changed. Opt-in; adds no wait and no DOM write.' },
       path: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'drag: [[x,y],…] press, glide, release (circles, signatures).' },
       instant: { type: 'boolean', description: 'drag path: stream moves without waiting (stroke timers).' },
       steps: {
@@ -1123,7 +1179,7 @@ export function registerTools(ctx, bridge) {
       },
       files: { type: 'array', items: { type: 'string' }, description: 'drop/upload: file paths on the browser machine.' },
       mimeType: { type: 'string', description: 'drop: MIME type of dropped text (default text/plain).' },
-      frame: { type: 'string', description: 'Act inside this child frame: id/prefix, URL substring, or index.' },
+      frame: { type: 'string', description: 'Act inside this child frame: id/prefix, URL substring, or index. upload: the frame holding the file input; a cross-origin frame the tab cannot read needs x,y or a top-document trigger without frame.' },
       browser: browserProperty,
     }, ['action']),
     output: {
@@ -1146,13 +1202,17 @@ export function registerTools(ctx, bridge) {
         // whole point of passing it, and dropping it silently made the tool
         // report success while the page never saw a held button.
         const holdMs = typeof args?.holdMs === 'number' ? args.holdMs : undefined
-        if (targets && targets.length) return send('click', { targets, forceActive: args?.forceActive === true })
-        if (args?.all === true && target) return send('click', { target, all: true, forceActive: args?.forceActive === true })
-        if (frame) return send('click', { target, text, frame, count, button, holdMs, forceActive: args?.forceActive === true })
-        if (typeof args?.x === 'number' && typeof args?.y === 'number') return send('click', { x: args.x, y: args.y, count, button, holdMs, forceActive: args?.forceActive === true })
-        if (text) return send('click', { text, count, button, holdMs, forceActive: args?.forceActive === true })
+        // verify:true travels with every click shape as well, so a menu or grid
+        // press that changed nothing is visible in the reply instead of looking
+        // like a success.
+        const verify = args?.verify === true ? true : undefined
+        if (targets && targets.length) return send('click', { targets, verify, forceActive: args?.forceActive === true })
+        if (args?.all === true && target) return send('click', { target, all: true, verify, forceActive: args?.forceActive === true })
+        if (frame) return send('click', { target, text, frame, count, button, holdMs, verify, forceActive: args?.forceActive === true })
+        if (typeof args?.x === 'number' && typeof args?.y === 'number') return send('click', { x: args.x, y: args.y, count, button, holdMs, verify, forceActive: args?.forceActive === true })
+        if (text) return send('click', { text, count, button, holdMs, verify, forceActive: args?.forceActive === true })
         if (!target) throw new Error('click needs target, text, or x/y')
-        return send('click', { target, count, button, holdMs, forceActive: args?.forceActive === true })
+        return send('click', { target, count, button, holdMs, verify, forceActive: args?.forceActive === true })
       }
       if (action === 'hover') return send('hover', { target: stringArg(args, 'target'), text: stringArg(args, 'text'), x: args?.x, y: args?.y, frame, forceActive: args?.forceActive === true })
       if (action === 'type') {
@@ -1160,6 +1220,11 @@ export function registerTools(ctx, bridge) {
         if (!target) throw new Error('type needs target')
         if (typeof args?.text !== 'string') throw new Error('type needs text')
         return send('type', { target, text: args.text, submit: args?.submit === true, frame, forceActive: args?.forceActive === true })
+      }
+      if (action === 'paste') {
+        const text = rawTextArg(args, 'text')
+        if (text === undefined) throw new Error('paste needs non-empty text')
+        return send('paste', { text, target: stringArg(args, 'target'), forceActive: args?.forceActive === true })
       }
       if (action === 'set') return send('set', { target: stringArg(args, 'target'), value: args?.value == null ? undefined : String(args.value), checked: typeof args?.checked === 'boolean' ? args.checked : undefined, frame })
       if (action === 'select') return send('select', { target: stringArg(args, 'target'), value: args?.value == null ? undefined : String(args.value), label: stringArg(args, 'label'), index: args?.index, frame })
@@ -1174,7 +1239,19 @@ export function registerTools(ctx, bridge) {
         if (!files.length && text === undefined) throw new Error('drop needs files or text')
         return send('drop', { target, files, text, x: args?.x, y: args?.y, mimeType: stringArg(args, 'mimeType'), frame, forceActive: args?.forceActive === true })
       }
-      if (action === 'upload') return send('upload', { target: stringArg(args, 'target'), files: Array.isArray(args?.files) ? args.files : undefined, frame })
+      if (action === 'upload') {
+        const target = stringArg(args, 'target')
+        const hasPoint = typeof args?.x === 'number' && typeof args?.y === 'number'
+        if (!target && !frame && !hasPoint) throw new Error('upload needs target, frame, or x and y')
+        return send('upload', {
+          target,
+          files: Array.isArray(args?.files) ? args.files : undefined,
+          frame,
+          x: hasPoint ? args.x : undefined,
+          y: hasPoint ? args.y : undefined,
+          forceActive: args?.forceActive === true,
+        })
+      }
       if (action === 'key') {
         const keys = Array.isArray(args?.keys) ? args.keys : undefined
         return send('key', {
@@ -1214,32 +1291,42 @@ export function registerTools(ctx, bridge) {
           keys: args?.keys && typeof args.keys === 'object' && !Array.isArray(args.keys) ? args.keys : undefined,
         })
       }
-      throw new Error('bsb_act needs action: click | hover | type | set | select | key | drive | scroll | drag | drop | upload | wheel')
+      throw new Error('bsb_act needs action: click | hover | type | paste | set | select | key | drive | scroll | drag | drop | upload | wheel')
     },
   })
 
   register({
     name: 'bsb_read',
     description:
-      'Read the tracked page, read-only. Use before acting to see what is on the page and what can be clicked. mode text (default): visible text, viewport, and interactive elements with @eN refs for bsb_act. mode rows: selector matches as structured rows for tables, cards, lists and grids - scrape with this, not raw HTML. mode html: one element\'s outerHTML.',
+      'Read the tracked page, read-only. Use before acting to see what is on the page and what can be clicked. mode text (default): visible text, viewport, and interactive elements with @eN refs for bsb_act. mode rows: selector matches as structured rows for tables, cards, lists and grids - scrape with this, not raw HTML. mode html: one element\'s outerHTML. mode feed: scroll-and-collect a virtualized list in one call, deduplicated by href or text, with a reason for where it stopped.',
     parameters: input({
-      mode: { type: 'string', enum: ['text', 'rows', 'html'], description: 'What to return (default text).' },
+      mode: { type: 'string', enum: ['text', 'rows', 'html', 'feed'], description: 'What to return (default text).' },
       maxChars: { type: 'number', description: 'text/html: cap the reply length.' },
       maxElements: { type: 'number', description: 'text: max interactive elements (default 60, max 200).' },
       probe: { type: 'array', items: { type: 'string' }, description: 'text: extra selectors whose box you need (canvas, map), max 20.' },
       frame: { type: 'string', description: 'text mode: read inside this child frame (id/prefix, URL substring, or index). A cross-origin frame fails with FRAME_NOT_READABLE.' },
       normalize: { type: 'boolean', description: 'text: strip zero-width/format characters and join runs of one-character block lines into one line (default false). Adds normalized:true.' },
-      selector: { type: 'string', description: 'rows: elements to read. When nothing matches and the page has a canvas, the reply adds canvas:true and a hint. html: element to dump.' },
+      selector: { type: 'string', description: 'rows/feed: elements to read. When nothing matches and the page has a canvas, the rows reply adds canvas:true and a hint. html: element to dump.' },
       limit: { type: 'number', description: 'rows: max rows (default 50).' },
       offset: { type: 'number', description: 'rows: skip this many (paging).' },
       text: { type: 'boolean', description: 'rows: include visible text (default true). innerText only; a zero-size row yields visible:false and no text, and textTruncated:true marks text cut at 240 characters.' },
       href: { type: 'boolean', description: 'rows: include a resolved link. A non-anchor row resolves its first http(s) descendant anchor (mailto fallback) and sets hrefSource:"descendant".' },
+      resolve: { type: 'boolean', description: 'rows: decode a known redirector href without navigating. Implies href:true. Recognizes google /url?q=|url=, google /goto?url=<base64, standard or URL-safe, padded or not> and l.facebook.com/l.php?u=, and adds resolved, hrefResolved and resolvableBy ("decoded"|"navigation"). t.co and undecodable payloads get resolvableBy:"navigation" instead of a guessed URL. A row without these fields is not a known redirector.' },
       image: { type: 'boolean', description: 'rows: include image source.' },
       state: { type: 'boolean', description: 'rows: include form state, id, name, class.' },
+      maxItems: { type: 'number', description: 'feed: max items to collect (default 20, max 200).' },
+      scroll: { type: 'boolean', description: 'feed: scroll the page\'s own scroller (window, or the nearest scrollable element at or above the first match) by 0.8 of a viewport per step, wait 500-700 ms, and re-read (default false).' },
+      dedupeBy: { type: 'string', enum: ['auto', 'href', 'text'], description: 'feed: item key. auto (default) uses the link when present, otherwise the normalized text; href/text force that preference with the other as fallback.' },
+      until: { type: 'string', description: 'feed: JavaScript expression evaluated in the page after each read; a truthy value stops the collection with reason "until".' },
+      forceActive: { type: 'boolean', description: 'feed: when the tab is hidden, hold the page lifecycle for the collection and release it afterwards (default false). Without it nothing is forced and the reply reports the hidden state.' },
       browser: browserProperty,
     }),    output: {
       schema: { type: 'object', additionalProperties: true },
-      render: (args, value) => (stringArg(args, 'mode') === 'text' || !stringArg(args, 'mode') ? renderRead(args, value) : jsonRender(value)),
+      render: (args, value) => {
+        const mode = stringArg(args, 'mode') || 'text'
+        if (mode === 'feed') return renderFeed(args, value)
+        return mode === 'text' ? renderRead(args, value) : jsonRender(value)
+      },
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
@@ -1253,8 +1340,19 @@ export function registerTools(ctx, bridge) {
           offset: args?.offset,
           text: args?.text,
           href: args?.href,
+          resolve: args?.resolve === true,
           image: args?.image,
           state: args?.state,
+        }, opts)
+      }
+      if (mode === 'feed') {
+        return bridge.send('feed', {
+          selector: stringArg(args, 'selector'),
+          maxItems: clampInt(args?.maxItems, 20, 1, 200),
+          scroll: args?.scroll === true,
+          dedupeBy: stringArg(args, 'dedupeBy'),
+          until: stringArg(args, 'until'),
+          forceActive: args?.forceActive === true,
         }, opts)
       }
       if (mode === 'html') {
