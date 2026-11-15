@@ -569,6 +569,26 @@ window.__ModuleLoader__.load({
       const count = state.browsers.length
       const pairing = bridge?.pairing ?? ''
 
+      /*
+       * The card chooses the order; it does not inherit the reply's order.
+       *
+       * The endpoint sorts browsers by the default target first, then by
+       * seconds since the last poll. That second key changes on every poll, so
+       * the array arrived in a new order every three seconds. React kept the
+       * keys and moved the row nodes, and Chrome's scroll anchoring moves the
+       * page scroll whenever a node above the viewport anchor moves. A reader
+       * scrolled down this list was pulled back up the page every poll.
+       *
+       * Label and id do not change, so sorting by them keeps every row in
+       * place. The default target keeps its meaning as a word in the row
+       * instead of as a position.
+       */
+      const ordered = React.useMemo(
+        () => [...state.browsers].sort((a, b) => String(a.label ?? '').localeCompare(String(b.label ?? ''))
+          || String(a.id).localeCompare(String(b.id))),
+        [state.browsers],
+      )
+
       return h(
         'div',
         { style: box },
@@ -579,14 +599,14 @@ window.__ModuleLoader__.load({
           : count === 0
             ? h('p', { style: muted }, 'No browsers yet. Connect below, or copy the pairing link into the extension popup.')
             : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-                state.browsers.map((entry) => h(
+                ordered.map((entry) => h(
                   'div',
                   { key: entry.id, style: line },
                   h('span', { style: mark(entry.connected) }),
                   h('span', { style: cell },
                     h('span', { style: cellName }, entry.label || 'Browser'),
                     h('span', { style: cellId },
-                      `${entry.id}${entry.version ? ` · v${entry.version}` : ''}${typeof entry.lastSeenSec === 'number' ? ` · seen ${entry.lastSeenSec}s ago` : ''}`),
+                      `${entry.id}${entry.version ? ` · v${entry.version}` : ''}${typeof entry.lastSeenSec === 'number' ? ` · seen ${entry.lastSeenSec}s ago` : ''}${entry.active ? ' · default target' : ''}`),
                   ),
                   h('button',
                     { style: { ...primary, padding: '4px 12px', fontSize: '11px', fontWeight: 500 }, disabled: busy === entry.id, onClick: () => drop(entry.id) },
