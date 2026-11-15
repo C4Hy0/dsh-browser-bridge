@@ -10,7 +10,9 @@ content, a logged-in session, canvas/WebGL, keyboard input, or a visual check,
 use these tools instead of curl, a headless library, or shell screenshots.
 
 Start with the tracked page. If the user says a page is already open, **adopt it**
-(`bsb_tabs use`); never open a duplicate.
+(`bsb_tabs use`); never open a duplicate. A fresh profile's only tab is
+`chrome://newtab/`, which bsb cannot script; `bsb_open` opens a new tab for the
+http(s) URL and reports `autoNewTab` instead of failing.
 
 ## Tool selection
 
@@ -47,9 +49,56 @@ Start with the tracked page. If the user says a page is already open, **adopt it
 4. **Wait properly.** After a click that loads or animates, use `bsb_wait_for`
    (`selector`, `text`, `url`, `expression`, `network`), never `sleep`. For
    timed UIs, `firstSelector` presses then waits; `clickSelector` presses the
-   moment it matches.
+   moment it matches. `visible:true` makes a selector wait ignore zero-height,
+   `display:none`/`visibility:hidden` and `aria-hidden` nodes.
 5. **Verify.** Re-read, `bsb_eval` the state, or `bsb_capture` the region. Do not
-   assume a click landed just because no error came back.
+   assume a click landed just because no error came back. `bsb_read` returns a
+   `state:` line and a `hint:` for an error page, an interstitial or a splash
+   skeleton.
+
+## Navigation truth and page state
+
+Chrome reports very different outcomes with the same success shape: a normal
+document, a committed `chrome-error://` page (HTTP 429, a blocked host,
+`ERR_CONNECTION_RESET`), a 200 bot-check interstitial, and a full-page splash
+whose app never booted. The replies now carry that difference.
+
+- `bsb_open` returns `requestedUrl` (what you asked for), `documentUrl` (what
+  the tab really shows), `httpStatus` (from navigation timing, or read off
+  Chrome's own error page), `navigationError` (the `net::ERR_*` from the
+  navigation), `readyState`, `bodyTextLen`, `elementCount`, and a `hint` when
+  the document is a chrome-error page, an empty shell/interstitial, or a
+  full-page splash. A 429 is named in `httpStatus` with no `bsb_observe`
+  network capture armed first.
+- A browser-internal tracked tab (`chrome://newtab/` on a fresh profile) no
+  longer blocks the first `bsb_open`: the worker opens a tab, sets
+  `autoNewTab:true`, `blockedTabId` and `autoNewTabReason`, and tracks it. You
+  do not need to pass `newTab:true` for that case.
+- `bsb_tabs list` shows the real document URL, `scriptable` and, when known,
+  `requestedUrl`, `documentUrl`, `navigationError`, `httpStatus`. A row whose
+  document failed is marked `navigation failed`; a `chrome://` row is marked
+  `not scriptable`.
+- `bsb_tabs reload` answers `reloaded:false` with `navigationError` and
+  `documentUrl` when the reload landed on a Chrome error page, instead of the
+  old always-true success shape. `reloaded:true` means a document loaded.
+- `bsb_tabs use {activate:true}` reports `activated`, `visibility`, `hidden`
+  and, when the page stayed hidden, a `reason`. A minimized window reports
+  outer `0x0` and `activated:false`; nothing raises or unminimizes the window.
+- `bsb_wait_for {url:"..."}` matches the document URL, the page title, and the
+  URL that was requested for the tab. On a tab with a known navigation error it
+  answers `matched:false` in about a second with `navigationError`,
+  `documentUrl` and a `hint` naming the error, instead of burning the timeout.
+- `bsb_wait_for {selector:"...", visible:true}` only matches a node that is
+  really visible: a non-zero box, not `display:none`/`visibility:hidden`, and
+  no `aria-hidden` ancestor. Selector replies carry `matchedVisibility`
+  (`visible`|`hidden`) and `matchedBox`, plus `ariaHidden` when that is the
+  reason. A splash skeleton's zero-height nodes no longer count as content.
+- `bsb_read` text returns a `state:` line before the text: `readyState`,
+  `httpStatus`, `bodyTextLen`, `elementCount`, `interactiveCount`,
+  `canvasCount`, `visibility`, and `hasSplash`/`splashHeight`, plus a `hint`
+  when the empty text is really an error page, an interstitial or an unrendered
+  splash. Empty text with a large DOM or a full-viewport splash is a render
+  problem, not an empty page.
 
 ## Visual work
 
@@ -57,6 +106,11 @@ Start with the tracked page. If the user says a page is already open, **adopt it
   `read_image`. `selector` crops one element; `rect` crops a region (fractions
   of an element, or CSS px); `scale` zooms; `preprocess` fixes mirrored, tiny,
   rotated, low-contrast, grayscale or thresholded pixels.
+- A hidden, background or minimized tab still captures: shots render
+  off-screen through `captureBeyondViewport` without activating the tab or
+  raising the window. The reply carries `hidden` and `visibility`, so read
+  those before trusting a frame as what the user sees. Only a genuinely 0×0
+  layout viewport fails with `TAB_NOT_VISIBLE`.
 - `frames`+`intervalMs` gives a burst; `fullPage` the scrollable page;
   `native:true` the element's image bytes.
 - `kind:"sheet"` tiles every match of a selector into one labelled contact
@@ -81,9 +135,13 @@ Start with the tracked page. If the user says a page is already open, **adopt it
 - The canvas has no DOM text. Use `bsb_eval` for game/framework state in
   `world:"main"` when available (the default `isolated` world is read-only),
   and `bsb_pixels`/`bsb_capture` for the picture.
-- If the tab is hidden the frame clock pauses: `bsb_act forceActive` with
-  `mode:"hold"` makes the page believe it is visible (no window raise), and
-  `releaseActive` drops it. The reply reports the visibility the page then saw.
+- If the tab is hidden the frame clock pauses and the browser holds input:
+  `click`, `hover`, `type`, `key`, `drag`, `drop` and `wheel` fail with
+  `TAB_NOT_VISIBLE` before anything is sent, and nothing is queued or replayed.
+  Wake the page with `bsb_act forceActive` and `mode:"hold"` (or pass
+  `forceActive:true` for one action), then retry; `releaseActive` drops a hold.
+  The reply reports the visibility the page then saw. `set`, `select` and
+  `scroll` still work hidden because they do not dispatch input.
 - Hold keys with `holdMs`; press combinations with `keys`; use `steps` for
   scripts with waits. Prefer physical `event.code` names (`KeyW`, `ArrowUp`,
   `Space`, `ControlLeft`).
@@ -119,8 +177,16 @@ Start with the tracked page. If the user says a page is already open, **adopt it
 ## Canvas and key-driven pages
 
 - `type` writes into inputs, textareas and contenteditable elements; it refuses a
-  canvas with `NOT_EDITABLE`. Use `bsb_act action:"key" text:"..."` (one real
-  keydown per character, `keyDelayMs` between them) for engines that read keys.
+  canvas with `NOT_EDITABLE`. It also refuses a zero-size, offscreen,
+  `display:none` or `visibility:hidden` target with `NOT_VISIBLE` and its box, so
+  an offscreen measurer that happens to be `document.activeElement` (for example
+  a Sheets `#waffle-rich-text-editor` parked at y=-9998) is not typed into: focus
+  the visible editor first by clicking the cell. After typing it reads the value
+  back and fails with `TYPE_NOT_APPLIED` when the write did not land. Use
+  `bsb_act action:"key" text:"..."` (one real keydown per character,
+  `keyDelayMs` between them) for engines that read keys; `\t` is sent as Tab and
+  `\n`/`\r` as Enter (the reply counts `tabs` and `enters`), while any other
+  control character fails with `BAD_ARGUMENT` instead of being silently dropped.
 - `bsb_act action:"wheel"` sends a real wheel event at x/y for maps, zoom and
   panels that listen to `wheel` rather than `scroll`.
 - To run code before a page's own scripts (hook WebAssembly or fetch, patch a
@@ -140,8 +206,11 @@ Start with the tracked page. If the user says a page is already open, **adopt it
 - `forceActive` is opt-in and never installed by default; release it when done.
   No tool raises, focuses, resizes or moves the browser window. `bsb_open` is
   background by default; `bsb_tabs use` fronts the tab unless `activate:false`.
-  A minimized 0×0 window is reported as `TAB_NOT_VISIBLE`; restore it yourself
-  rather than expecting the tool to do it.
+  Input actions refuse a hidden page with `TAB_NOT_VISIBLE` instead of queueing,
+  so nothing is sent and nothing replays. `bsb_capture` still renders a hidden
+  or minimized tab off-screen without raising anything and reports
+  `hidden`/`visibility`; only a genuinely 0×0 layout viewport fails with
+  `TAB_NOT_VISIBLE`.
 - Drive pages through their own controls. Do not inject DOM/CSS or patch page
   state except inside the guarded `bsb_eval` read paths, and only when the task
   is a benchmark/demo target where that is allowed.
@@ -161,14 +230,17 @@ Start with the tracked page. If the user says a page is already open, **adopt it
 | Symptom | Do |
 | --- | --- |
 | "No page is tracked" | `bsb_tabs list`, then `use`; or `bsb_open` |
-| Page hidden / input queued | `bsb_act forceActive` (`hold` for a session); release after |
+| `bsb_open` succeeded but the page is blank / 429 | read `documentUrl`, `httpStatus`, `navigationError`, `hint`; treat a chrome-error page as a failed navigation |
+| Page hidden / input refused (`TAB_NOT_VISIBLE`) | `bsb_act forceActive` (`hold` for a session, or `forceActive:true` for one action), then retry; release after |
+| `activate:true` did not make the page visible | read `reason`; a minimized window stays hidden, restore it yourself |
 | Element not found | `bsb_read` text, check shadow/iframe, wait for it (`bsb_wait_for`) |
+| Wait matched a hidden node | prefer `visible:true`; read `matchedVisibility`/`matchedBox` |
 | Click did nothing | enable/stable wait, scroll into view, try `@eN`, check overlay/iframe |
-| Typing lost | read the value back; `submit`; check masks/framework setter |
+| Typing lost / `TYPE_NOT_APPLIED` | read the value back; check the target is the visible editor, not an offscreen measurer; `submit`; check masks/framework setter |
 | Canvas has no text | `bsb_eval`, `bsb_pixels`, `bsb_capture`; map canvas coordinates |
 | CAPTCHA / image puzzle | capture or pixels, solve, then click cells; verify before submit |
 | Network request fails | repeat it with `bsb_eval` fetch inside the page (cookies) |
-| 0×0 viewport / minimized | restore the window; tools will not raise it |
+| 0×0 layout viewport | restore the window; tools will not raise it. A minimized window with a normal layout viewport still captures and reports `hidden` |
 
 ## Reference
 

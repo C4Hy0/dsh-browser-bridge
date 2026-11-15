@@ -388,8 +388,9 @@ async function uploadPage({ target, files, frame, tabId: hint }) {
   }
 }
 
-async function wheelPage({ x, y, deltaX, deltaY, modifiers, tabId: hint }) {
+async function wheelPage({ x, y, deltaX, deltaY, modifiers, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const { visibility, forced } = await requireInputVisibility(tabId, 'wheel', forceWanted)
   const px = Number(x)
   const py = Number(y)
   if (!Number.isFinite(px) || !Number.isFinite(py)) throw fail('BAD_ARGUMENT', 'wheel needs numeric x and y')
@@ -412,11 +413,12 @@ async function wheelPage({ x, y, deltaX, deltaY, modifiers, tabId: hint }) {
   try {
     await Promise.race([dispatched, hidden])
   } catch (error) {
-    if (error?.code === 'TAB_NOT_VISIBLE') throw error
+    if (forced) await clearForced(tabId, forced)
     throw error
   }
   const meta = await pageMeta(tabId)
-  return { url: meta?.url ?? '', title: meta?.title ?? '', at: { x: px, y: py }, deltaX: dx, deltaY: dy, modifiers: mask }
+  if (forced) await clearForced(tabId, forced)
+  return { url: meta?.url ?? '', title: meta?.title ?? '', at: { x: px, y: py }, deltaX: dx, deltaY: dy, modifiers: mask, ...inputSuccess(visibility, forced) }
 }
 
 /** Register a script that runs before any page script in every new document. */
@@ -846,12 +848,224 @@ async function waitReady(tabId, timeoutMs) {
   }
 }
 
+/**
+ * The document as the browser reports it, read-only.
+ *
+ * One probe shared by every navigation-reporting tool, so bsb_open, bsb_read,
+ * bsb_tabs and bsb_wait_for cannot disagree about the same document. It also
+ * names a splash or shell: a page whose DOM exists but which paints no content
+ * is otherwise indistinguishable from a loaded empty page.
+ *
+ * `httpStatus` comes from the navigation timing entry and falls back to the
+ * status Chrome prints on its own error page, so a 429 is named without a
+ * network capture armed before the navigation.
+ */
+async function pageState(tabId) {
+  return evaluate(tabId, `(() => {
+    const body = document.body;
+    const text = ((body ? body.innerText : '') || '').trim();
+    const sample = text.replace(/\\s+/g, ' ');
+    const count = (selector) => document.querySelectorAll(selector).length;
+    const nav = performance.getEntriesByType('navigation')[0] || {};
+    const measured = Number(nav.responseStatus) || 0;
+    const printed = /\\bHTTP ERROR\\s+(\\d{3})\\b/i.exec(sample);
+    const printedStatus = printed ? Number(printed[1]) : 0;
+    const failedDocument = /^chrome-error:/i.test(location.href);
+    const errorCode = /\\b(ERR_[A-Z0-9_]+)\\b/.exec(sample);
+    const nodeCount = document.getElementsByTagName('*').length;
+    // A full-page splash or skeleton paints over the app while it boots. Only
+    // nodes that name themselves as one are considered, and only when they
+    // cover most of the viewport and carry no text of their own.
+    let splashHeight = 0;
+    let splashText = 0;
+    for (const el of document.querySelectorAll('[id*="splash" i],[class*="splash" i],[id*="skeleton" i],[class*="skeleton" i],[data-testid*="splash" i],[data-testid*="skeleton" i],[id*="app-loading" i],[class*="app-loading" i]')) {
+      if (splashHeight > 0) break;
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.height <= 0) continue;
+      splashHeight = Math.round(rect.height);
+      splashText = ((el.innerText || '').trim()).length;
+    }
+    return {
+      url: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      // On a Chrome error page the status printed on the page is the response
+      // status that failed; the navigation timing entry describes the error
+      // document itself and must not win.
+      httpStatus: failedDocument && printedStatus ? printedStatus : (measured || printedStatus),
+      bodyTextLen: text.length,
+      elementCount: nodeCount,
+      interactiveCount: count('a,button,input,textarea,select,label,summary,[role],[tabindex],[contenteditable="true"],[onclick]'),
+      canvasCount: count('canvas'),
+      visibility: document.visibilityState,
+      hidden: document.hidden === true,
+      viewportHeight: window.innerHeight || 0,
+      hasSplash: splashHeight > 0 && splashHeight >= (window.innerHeight || 0) * 0.6 && splashText < 40 && text.length < 200,
+      splashHeight,
+      failedDocument,
+      errorCode: errorCode ? errorCode[1] : '',
+      outer: { width: window.outerWidth || 0, height: window.outerHeight || 0 },
+    };
+  })()`)
+}
+
+/** The subset of `pageState` a read reply carries, so its state block stays small. */
+function stateSummary(state) {
+  return {
+    readyState: state.readyState,
+    httpStatus: Number(state.httpStatus) || 0,
+    bodyTextLen: Number(state.bodyTextLen) || 0,
+    elementCount: Number(state.elementCount) || 0,
+    interactiveCount: Number(state.interactiveCount) || 0,
+    canvasCount: Number(state.canvasCount) || 0,
+    visibility: state.visibility,
+    hidden: state.hidden,
+    hasSplash: state.hasSplash,
+    splashHeight: Number(state.splashHeight) || 0,
+  }
+}
+
+/**
+ * One sentence naming why a document is not the page the caller asked for.
+ *
+ * Chrome has three quiet failure shapes: a committed error document, a 200
+ * interstitial or empty shell, and a full-page splash whose app never booted.
+ * Each looks like a finished load, so this hint is the only place the
+ * difference is visible without a follow-up read or eval.
+ */
+function documentHint(state, { requestedUrl, navigationError } = {}) {
+  if (!state || typeof state !== 'object') return undefined
+  const documentUrl = String(state.url ?? '')
+  const error = String(navigationError ?? state.errorCode ?? '')
+  const status = Number(state.httpStatus) > 0 ? Number(state.httpStatus) : 0
+  if (state.failedDocument === true || /^chrome-error:/i.test(documentUrl)) {
+    const code = error || (status > 0 ? 'HTTP ' + status + ' response' : 'the navigation did not complete')
+    const suffix = error && status > 0 ? ' (HTTP ' + status + ')' : ''
+    const asked = requestedUrl && requestedUrl !== documentUrl ? ' for ' + requestedUrl : ''
+    return 'navigation failed' + asked + ': ' + code + suffix + '. The document is a Chrome error page, not the requested page; call bsb_open with the URL again to retry.'
+  }
+  if (error) {
+    // The navigation named a failure but committed no error document (for
+    // example ERR_ABORTED): the tab still shows whatever was there before.
+    return 'navigation failed: ' + error + '. The tab did not commit the requested document' + (documentUrl ? ' (it still shows ' + documentUrl + ')' : '') + '; call bsb_open with the URL again to retry.'
+  }
+  const title = String(state.title ?? '')
+  const textLen = Number(state.bodyTextLen) || 0
+  const elementCount = Number(state.elementCount) || 0
+  const interactive = Number(state.interactiveCount) || 0
+  if (state.hasSplash === true) {
+    return 'document is a full-page splash or skeleton (' + (Number(state.splashHeight) || 0) + 'px of a ' + (Number(state.viewportHeight) || 0) + 'px viewport, ' + textLen + ' chars of body text). The app has not rendered its content yet; wait for real content or read it again later.'
+  }
+  const short = textLen < 160
+  if (short && (elementCount >= 200 || (interactive === 0 && (title === '' || elementCount < 60)))) {
+    const measured = status > 0 ? ', HTTP ' + status : ''
+    return 'document looks like an empty shell or interstitial (title ' + JSON.stringify(title) + ', ' + textLen + ' chars of body text, ' + elementCount + ' elements, ' + interactive + ' interactive' + measured + '). This is not a rendered page.'
+  }
+  return undefined
+}
+
 // ---------------------------------------------------------------------------
 // Page functions (serialized into the page; no outer-scope references)
 // ---------------------------------------------------------------------------
 
-function snapshotPage(maxChars, maxElements) {
-  const text = (document.body ? document.body.innerText : '') || ''
+function snapshotPage(maxChars, maxElements, normalize) {
+  const rawSource = (document.body ? document.body.innerText : '') || ''
+
+  // innerText follows the layout tree, not the paint clip: text rendered inside
+  // an overflow:hidden box is included even when the box shows only one line of
+  // it. Anti-scrape timestamps use exactly that shape (60 single-character
+  // spans, 58 of them parked below a 16px clip). Under normalize, replace each
+  // small clipped run with the characters actually inside the clip box, ordered
+  // by their painted position, so the reader gets "5h" instead of a column of
+  // fragments. Larger clipped containers are left alone; this is a timestamp
+  // and badge fix, not a full reimplementation of innerText.
+  const visibleClippedText = (el) => {
+    const box = el.getBoundingClientRect();
+    const format = /[\u034F\u200B-\u200F\u202A-\u202E\uFEFF]/;
+    const parts = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const value = node.textContent || '';
+      for (let index = 0; index < value.length; index += 1) {
+        const ch = value[index];
+        if (format.test(ch)) continue;
+        const range = document.createRange();
+        range.setStart(node, index);
+        range.setEnd(node, index + 1);
+        const rects = Array.from(range.getClientRects());
+        range.detach?.();
+        const rect = rects.find((r) => r.width > 0 && r.height > 0
+          && r.right > box.left + 0.5 && r.left < box.right - 0.5
+          && r.bottom > box.top + 0.5 && r.top < box.bottom - 0.5);
+        if (rect) parts.push({ ch, x: rect.left, y: rect.top, w: rect.width });
+      }
+    }
+    if (!parts.length) return '';
+    parts.sort((a, b) => (Math.abs(a.y - b.y) < 4 ? a.x - b.x : a.y - b.y));
+    let out = '';
+    let last = null;
+    for (const part of parts) {
+      if (last && Math.abs(part.y - last.y) >= 4) out += '\n';
+      else if (last && part.x - (last.x + last.w) > 1.5 && !/\s$/.test(out)) out += ' ';
+      out += part.ch;
+      last = part;
+    }
+    return out.replace(/[ \t]+/g, ' ').trim();
+  };
+  const replaceClippedRuns = (value) => {
+    let out = value;
+    let candidates = 0;
+    for (const el of document.getElementsByTagName('*')) {
+      if (candidates >= 40) break;
+      if (el.clientWidth <= 0 || el.clientHeight <= 0) continue;
+      if (el.scrollHeight <= el.clientHeight + 1) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 600 || rect.height > 120) continue;
+      const raw = (el.innerText || '').trim();
+      if (raw.length < 2 || raw.length > 800) continue;
+      const style = getComputedStyle(el);
+      if (style.overflow !== 'hidden' && style.overflow !== 'clip') continue;
+      candidates += 1;
+      const visible = visibleClippedText(el);
+      if (visible && visible !== raw && out.includes(raw)) out = out.replace(raw, visible);
+    }
+    return out;
+  };
+  const source = normalize === true ? replaceClippedRuns(rawSource) : rawSource;
+
+  // Anti-scrape markup renders a timestamp as block spans of one character each,
+  // padded with zero-width format characters, so innerText returns a vertical
+  // column instead of the string a human reads. The opt-in `normalize` strips the
+  // invisible characters and joins a run of one-character lines back into one
+  // line before the maxChars cut. Blank lines still separate paragraphs, and a
+  // whitespace-only line inside a run is the word space between its characters.
+  const normalizeText = (value) => {
+    const plain = String(value ?? '').replace(/[\u034F\u200B-\u200F\u202A-\u202E\uFEFF]/g, '')
+    const out = []
+    let run = ''
+    const flush = () => {
+      if (!run) return
+      out.push(run.replace(/[ \t\u00A0]+/g, ' ').trim())
+      run = ''
+    }
+    for (const line of plain.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (!trimmed && line) {
+        if (run) { run += ' '; continue }
+        out.push('')
+        continue
+      }
+      if (!trimmed) { flush(); out.push(''); continue }
+      if (trimmed.length === 1) { run += trimmed; continue }
+      flush()
+      out.push(line)
+    }
+    flush()
+    return out.join('\n')
+  }
 
   const cssPath = (el) => {
     // Inside a shadow root a path is relative to that root: `deepFindExpr` tries
@@ -929,13 +1143,17 @@ function snapshotPage(maxChars, maxElements) {
   // Shadow content is invisible to body.innerText; append a compact digest so
   // the sample text still describes what a shadow-heavy page shows.
   const shadowDigest = shadowText.filter(Boolean).join(' ¶ ').slice(0, 1500)
-  const full = shadowDigest ? text + '\n--- shadow ---\n' + shadowDigest : text
-  const truncated = full.length > maxChars
+  const full = shadowDigest ? source + '\n--- shadow ---\n' + shadowDigest : source
+  // Normalizing before the cut is what puts the clipped tail of a timestamp on
+  // one line; truncating first would leave the caller a column of fragments.
+  const normalized = normalize === true ? normalizeText(full) : full
+  const truncated = normalized.length > maxChars
   return {
     url: location.href,
     title: document.title,
-    text: truncated ? full.slice(0, maxChars) : full,
+    text: truncated ? normalized.slice(0, maxChars) : normalized,
     truncated,
+    ...(normalize === true ? { normalized: true } : {}),
     viewport: {
       width: window.innerWidth,
       height: window.innerHeight,
@@ -1046,6 +1264,37 @@ const cropPng = async (base64, sx, sy, sw, sh, outScale, mime = 'image/png') => 
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * What the last navigation of each tab actually did.
+ *
+ * A failed http(s) navigation commits a `chrome-error://` document, and that
+ * document cannot say which URL was asked for or why it failed. `Page.navigate`
+ * returns the reason (`errorText`) in the reply and this worker is the only
+ * place that sees it, so keep it per tab: bsb_tabs, bsb_wait_for and bsb_read
+ * can then report the failure instead of reading an opaque error page.
+ */
+const navOutcomes = new Map()
+const NAV_OUTCOME_MAX = 32
+
+function rememberNav(tabId, outcome) {
+  if (typeof tabId !== 'number') return
+  const previous = navOutcomes.get(tabId) ?? {}
+  navOutcomes.set(tabId, { ...previous, ...outcome })
+  while (navOutcomes.size > NAV_OUTCOME_MAX) {
+    const oldest = navOutcomes.keys().next().value
+    navOutcomes.delete(oldest)
+  }
+}
+
+const navOutcome = (tabId) => (typeof tabId === 'number' ? navOutcomes.get(tabId) : undefined)
+
+/**
+ * Pages Chrome's debugger refuses to script: chrome://, edge://, devtools://,
+ * about: and view-source. `chrome-error://` is deliberately absent, because a
+ * committed error document can be read and reported.
+ */
+const isInternalUrl = (url) => /^(chrome|edge|brave|devtools|about|view-source):/i.test(String(url ?? ''))
+
 /** The tab this browser is driving, if any. */
 const getTrackedId = async () => {
   // local, not session: a reload wipes session storage and would orphan the tab
@@ -1118,6 +1367,20 @@ async function openPage({ url, newTab, activate, tabId: hint }) {
   if (!tab && typeof hint === 'number') {
     tab = await chrome.tabs.get(hint).catch(() => undefined)
   }
+  // A browser-internal tracked tab (chrome://newtab/ is the only tab on a fresh
+  // profile) cannot be attached to, so reusing it made the first bsb_open of a
+  // session fail with a chrome:// error that blamed the requested http(s) URL.
+  // Open a tab for the caller and say which tab was blocked, instead of making
+  // them discover newTab:true.
+  let autoNewTab
+  if (tab && isInternalUrl(tab.url)) {
+    autoNewTab = {
+      tabId: tab.id,
+      url: String(tab.url ?? ''),
+      reason: 'tracked tab ' + tab.id + ' is ' + String(tab.url ?? '') + ' (a browser-internal page bsb cannot script); opened a new tab for ' + url,
+    }
+    tab = undefined
+  }
   // Background by default: opening a page for automation must not raise the
   // window or steal the active tab. activate:true is the explicit opt-in.
   if (!tab) tab = await chrome.tabs.create({ url: 'about:blank', active: activate === true })
@@ -1130,13 +1393,55 @@ async function openPage({ url, newTab, activate, tabId: hint }) {
   // frame rate instead of overriding it, because forcing `active`/focus would
   // change site behaviour the user did not ask us to change.
   const loaded = waitEvent(tab.id, 'Page.loadEventFired', 20000).catch(() => undefined)
-  await send(tab.id, 'Page.navigate', { url })
-  await loaded
-  await waitReady(tab.id, 8000)
-  await delay(600)
-  const meta = await pageMeta(tab.id)
-  const out = { tabId: tab.id, url: meta?.url ?? url, title: meta?.title ?? '' }
+  // Page.navigate's errorText is the only in-band reason for a failed
+  // navigation: Chrome then commits a chrome-error:// document whose title is
+  // the host and whose body is a human-readable page. Keep the reason.
+  let navigationError
+  try {
+    const navigated = await send(tab.id, 'Page.navigate', { url })
+    if (typeof navigated?.errorText === 'string' && navigated.errorText) navigationError = navigated.errorText
+  } catch (error) {
+    const message = String(error?.message ?? error)
+    if (!/net::|ERR_[A-Z]|blocked|cannot navigate/i.test(message)) throw error
+    navigationError = message
+  }
+  // A committed error page still fires loadEventFired, but a navigation that
+  // never committed can leave it pending; do not spend the full load timeout
+  // when Page.navigate already named the failure.
+  await (navigationError ? Promise.race([loaded, delay(1500)]) : loaded)
+  await waitReady(tab.id, navigationError ? 4000 : 8000)
+  await delay(navigationError ? 400 : 600)
+  const state = await pageState(tab.id).catch(() => null)
+  const meta = await pageMeta(tab.id).catch(() => null)
+  const documentUrl = String(state?.url ?? meta?.url ?? '')
+  const outcome = {
+    requestedUrl: url,
+    documentUrl,
+    title: String(state?.title ?? meta?.title ?? ''),
+    ...(Number(state?.httpStatus) > 0 ? { httpStatus: Number(state.httpStatus) } : {}),
+    ...(navigationError ? { navigationError } : {}),
+  }
+  rememberNav(tab.id, outcome)
+  const outcomeHint = documentHint(state, { requestedUrl: url, navigationError })
+  const out = {
+    tabId: tab.id,
+    url: documentUrl || url,
+    title: outcome.title,
+    requestedUrl: url,
+    documentUrl: documentUrl || url,
+    readyState: state?.readyState ?? 'unknown',
+    bodyTextLen: Number(state?.bodyTextLen) || 0,
+    elementCount: Number(state?.elementCount) || 0,
+    ...(outcome.httpStatus ? { httpStatus: outcome.httpStatus } : {}),
+    ...(outcome.navigationError ? { navigationError: outcome.navigationError } : {}),
+    ...(outcomeHint ? { hint: outcomeHint } : {}),
+  }
   if (recovered?.recovered) out.recoveredFrom = recovered.was
+  if (autoNewTab) {
+    out.autoNewTab = true
+    out.blockedTabId = autoNewTab.tabId
+    out.autoNewTabReason = autoNewTab.reason
+  }
   return out
 }
 
@@ -1149,6 +1454,14 @@ async function requirePage(hint) {
   }
   const tab = await trackedTab()
   if (!tab) throw fail('NO_TAB', 'No page is open; call bsb_open first.')
+  // A browser-internal page is refused by the debugger, and the raw error names
+  // no tab and no way out. Name both.
+  if (isInternalUrl(tab.url)) {
+    throw fail(
+      'TAB_NOT_SCRIPTABLE',
+      'the tracked tab ' + tab.id + ' is ' + String(tab.url ?? '') + ', a browser-internal page bsb cannot script; call bsb_open with the http(s) URL (newTab:true also opens a fresh tab).',
+    )
+  }
   // A tab left on an error page cannot be attached to; say so plainly instead of
   // surfacing DevTools' opaque 'Cannot attach to this target'.
   await attachTab(tab.id, { recover: false }).catch((error) => {
@@ -1160,7 +1473,7 @@ async function requirePage(hint) {
   return tab.id
 }
 
-async function readPage({ maxChars, maxElements, probe, frame, tabId: hint }) {
+async function readPage({ maxChars, maxElements, probe, frame, normalize, tabId: hint }) {
   const tabId = await requirePage(hint)
   let frameHit
   let contextId
@@ -1198,7 +1511,7 @@ async function readPage({ maxChars, maxElements, probe, frame, tabId: hint }) {
   const readIn = (source) => (contextId === undefined
     ? evaluate(tabId, source)
     : evaluateInContext(tabId, contextId, source))
-  const value = await readIn(`(${snapshotPage.toString()})(${Number(maxChars) || 6000}, ${Number(maxElements) || 60})`)
+  const value = await readIn(`(${snapshotPage.toString()})(${Number(maxChars) || 6000}, ${Number(maxElements) || 60}, ${normalize === true})`)
   if (!value || typeof value !== 'object') throw fail('CDP_ERROR', 'the page could not be read')
   const wanted = (Array.isArray(probe) ? probe : [])
     .filter((selector) => typeof selector === 'string' && selector.length > 0 && selector.length <= 400)
@@ -1226,6 +1539,19 @@ async function readPage({ maxChars, maxElements, probe, frame, tabId: hint }) {
     })()`)
   }
   refs = new Map(value.elements.map((element) => [element.ref, element.selector]))
+  // A read that returns empty text is not the same as a page with nothing to
+  // say: the document may be an error page, a bot-check interstitial or a
+  // splash skeleton. The state block and its hint are what separate them.
+  const state = await pageState(tabId).catch(() => null)
+  if (state) {
+    value.state = stateSummary(state)
+    const outcome = navOutcome(tabId)
+    const hint = documentHint(state, {
+      requestedUrl: outcome?.requestedUrl,
+      navigationError: outcome?.navigationError,
+    })
+    if (hint) value.hint = hint
+  }
   const dialog = recentDialog(tabId)
   if (dialog) {
     value.dialog = dialog
@@ -1382,8 +1708,14 @@ async function followMapArea(tabId, x, y, beforeUrl, afterUrl) {
 
 async function clickPage({ target, text, x, y, frame, count, targets, all, button, holdMs, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
-  const layout = await ensureLayout(tabId, { forceActive: forceWanted })
-  const forced = layout?.forced
+  // Refuse before measuring or dispatching: input into a hidden page is held by
+  // the browser and replayed later, which is worse than an error.
+  const { visibility, forced } = await requireInputVisibility(tabId, 'click', forceWanted)
+  const layout = await ensureLayout(tabId)
+  const finish = async (reply) => {
+    if (forced) await clearForced(tabId, forced)
+    return { ...reply, ...inputSuccess(visibility, forced) }
+  }
   // Batch mode: a grid of tiles needs dozens of presses; one call keeps the
   // sequence tight and lets a single "select all these" request stay human-paced.
   if (Array.isArray(targets) && targets.length) {
@@ -1414,7 +1746,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     }
     await delay(200)
     const batchMeta = await pageMeta(tabId)
-    return { url: batchMeta?.url ?? '', title: batchMeta?.title ?? '', clicked, clicks: clicked.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }
+    return finish({ url: batchMeta?.url ?? '', title: batchMeta?.title ?? '', clicked, clicks: clicked.length, windowRestored: layout.restored, dialog: recentDialog(tabId) })
   }
   // Coordinate clicks: many widgets (canvas maps, custom controls) expose no
   // usable selector, but the agent can still see where to press.
@@ -1426,7 +1758,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     let meta = await pageMeta(tabId)
     const followed = await followMapArea(tabId, px, py, before?.url, meta?.url)
     if (followed) meta = (await pageMeta(tabId)) ?? meta
-    return { url: meta?.url ?? '', title: meta?.title ?? '', clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId), followed }
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId), followed })
   }
   // Frames: the element lives in a child document, but the pointer is global —
   // resolve the point locally, then offset it by the frame's box in this page.
@@ -1457,7 +1789,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     const taps = await pressAt(tabId, { x: px, y: py }, count, button, holdMs)
     await delay(400)
     const meta = await pageMeta(tabId)
-    return { url: meta?.url ?? '', title: meta?.title ?? '', frameId: hit.frameId, clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) }
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', frameId: hit.frameId, clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) })
   }
   // Text targeting: the label survives re-renders that invalidate @eN refs, and
   // needs no knowledge of the page's markup.
@@ -1467,7 +1799,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     const taps = await pressAt(tabId, { x: hit.x, y: hit.y }, count, button, holdMs)
     await delay(400)
     const meta = await pageMeta(tabId)
-    return { url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches, clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) }
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches, clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) })
   }
   const selector = resolveTarget(target)
   // Press every match in one call: dense grids of checkboxes otherwise cost one
@@ -1483,7 +1815,7 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     }
     await delay(200)
     const allMeta = await pageMeta(tabId)
-    return { url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }
+    return finish({ url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId) })
   }
   const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
@@ -1505,14 +1837,11 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
   const followed = await followMapArea(tabId, box.x, box.y, beforeClick?.url, meta?.url)
   if (followed) meta = (await pageMeta(tabId)) ?? meta
   const described = await evaluate(tabId, `(() => { try { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; return { tag: el.tagName.toLowerCase(), text: (el.innerText || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 40), id: el.id || undefined, name: el.getAttribute?.('name') || undefined }; } catch { return null } })()`)
-  const hidden = await pageHidden(tabId)
-  if (forced) await clearForced(tabId, forced)
-  return {
+  return finish({
     url: meta?.url ?? '', title: meta?.title ?? '', matchedCount: matched, element: described ?? undefined,
     clickedAt: { x: box.x, y: box.y }, clicks: taps, windowRestored: layout.restored,
-    dialog: recentDialog(tabId), followed, hidden, hint: hidden && !forced ? HIDDEN_HINT : undefined,
-    forced: forced ? { ...forced, cleared: true } : undefined,
-  }
+    dialog: recentDialog(tabId), followed,
+  })
 }
 
 /**
@@ -1545,14 +1874,17 @@ async function clearAndType(tabId, text) {
  * Real key events are the right default, but some pages cancel them (a keydown
  * handler that returns false), run an input mask that drops characters, or
  * re-render the node mid-type. The typed value is therefore read back, and when
- * it does not contain the text the value is set through the prototype setter
- * and announced with input/change so v-model-style bindings still fire.
+ * it does not contain the text an input/textarea value is set through the
+ * prototype setter and announced with input/change so v-model bindings still
+ * fire. A contenteditable node is never written directly: a scripted DOM edit of
+ * a rich editor is page injection, so a write that did not land there is an
+ * error for the caller, not something to fake.
  */
 async function ensureTyped(tabId, selector, text, contextId) {
   const wanted = String(text ?? '')
   const find = deepFindExpr(selector)
   const read = `(() => { const el = ${find}; if (!el) return null;
-    const raw = el.value !== undefined ? el.value : el.textContent;
+    const raw = el.value !== undefined ? el.value : (el.innerText || el.textContent);
     return String(raw || ''); })()`
   const run = (source) => (contextId === undefined
     ? evaluate(tabId, source)
@@ -1560,47 +1892,138 @@ async function ensureTyped(tabId, selector, text, contextId) {
   const value = await run(read)
   if (typeof value === 'string' && value.includes(wanted)) return { value, forced: false }
   const write = `(() => { const el = ${find}; if (!el) return null;
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag !== 'input' && tag !== 'textarea') return null;
+    const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
     const next = ${JSON.stringify(wanted)};
     if (setter) setter.call(el, next); else el.value = next;
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    const raw = el.value !== undefined ? el.value : el.textContent;
+    const raw = el.value !== undefined ? el.value : (el.innerText || el.textContent);
     return String(raw || ''); })()`
-  const forced = await run(write)
-  return { value: forced ?? value, forced: true }
+  const written = await run(write)
+  return { value: typeof written === 'string' ? written : value, forced: typeof written === 'string' }
 }
 
-const editableInfoExpr = (selector) => `(() => {
+/**
+ * Measure an editable target and take focus, refusing a target that cannot take
+ * input. `boxOf` alone cannot describe a zero-size element or a hidden one, and
+ * a silent `focus()` on an offscreen measurer used to send the whole text into
+ * whatever was focused before it.
+ *
+ * The box is measured before and after scrolling it into view, because an
+ * offscreen input that CAN be scrolled to is a normal form field, while one that
+ * stays outside the viewport (a measurer parked at y=-9998, a proxy node) cannot
+ * receive a real keystroke no matter what is typed.
+ */
+const editableTargetExpr = (selector) => `(() => {
   const el = ${deepFindExpr(selector)};
   if (!el) return null;
-  const tag = (el.tagName || '').toLowerCase();
-  const type = (el.getAttribute('type') || '').toLowerCase();
-  const textInput = tag === 'input' && !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(type);
-  return { tag, type, editable: textInput || tag === 'textarea' || el.isContentEditable === true };
+  const read = () => {
+    const style = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    const tag = (el.tagName || '').toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const textInput = tag === 'input' && !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(type);
+    return {
+      tag, type,
+      id: el.id || undefined,
+      className: typeof el.className === 'string' && el.className ? el.className.slice(0, 80) : undefined,
+      editable: textInput || tag === 'textarea' || el.isContentEditable === true,
+      width: Math.round(r.width), height: Math.round(r.height),
+      x: Math.round(r.x), y: Math.round(r.y),
+      display: style.display, visibility: style.visibility,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    };
+  };
+  const first = read();
+  const zero = first.width <= 0 || first.height <= 0;
+  const blocked = first.display === 'none' || first.visibility === 'hidden';
+  if (!zero && !blocked) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  const state = zero || blocked ? first : read();
+  state.offscreen = state.width > 0 && state.height > 0
+    && (state.x + state.width <= 0 || state.y + state.height <= 0
+      || state.x >= state.viewport.width || state.y >= state.viewport.height);
+  // Do not focus a target that is about to be refused: focus alone can move
+  // page state (and an editor's own caret), which is exactly what an offscreen
+  // measurer must not cause.
+  if (zero || blocked || state.offscreen || !state.editable) return state;
+  el.focus();
+  const root = el.getRootNode();
+  const active = (root && root.activeElement) || document.activeElement;
+  state.focused = active === el || el.contains(active);
+  return state;
 })()`
 
-async function typePage({ target, text, submit, frame, tabId: hint }) {
+function describeEditableTarget(selector, state) {
+  const id = state?.id ? ` id "${state.id}"` : ''
+  const tag = state?.tag ?? 'element'
+  const size = state ? `${state.width}x${state.height} at (${state.x},${state.y})` : 'an unmeasured box'
+  const view = state?.viewport ? ` in a ${state.viewport.width}x${state.viewport.height} viewport` : ''
+  const style = state ? ` (display "${state.display}", visibility "${state.visibility}")` : ''
+  return `${selector} (${tag}${id}) measures ${size}${view}${style}`
+}
+
+const OFFSCREEN_EDITOR_HINT =
+  'the target is most likely an offscreen measurer or focus proxy, not the editor the page displays; '
+  + 'focus the visible editor first (for example click the cell or press Enter on it), then retry. '
+  + 'Clipboard paste and DOM injection are not used: this tool sends real input only'
+
+async function requireEditableTarget(tabId, selector, contextId, where) {
+  const source = editableTargetExpr(selector)
+  const state = contextId === undefined
+    ? await evaluate(tabId, source).catch(() => null)
+    : await evaluateInContext(tabId, contextId, source).catch(() => null)
+  if (!state) throw fail('TARGET_NOT_FOUND', `no field matches ${selector}${where ? ' in ' + where : ''}`)
+  const described = describeEditableTarget(selector, state)
+  if (state.display === 'none') {
+    throw fail('NOT_VISIBLE', `type cannot write into ${described}: display is "none", so nothing is rendered and nothing was typed.`)
+  }
+  if (state.visibility === 'hidden') {
+    throw fail('NOT_VISIBLE', `type cannot write into ${described}: visibility is "hidden", so nothing is shown and nothing was typed.`)
+  }
+  if (state.width <= 0 || state.height <= 0) {
+    throw fail('NOT_VISIBLE', `type cannot write into ${described}: the box has zero area, so no real input can land. ${OFFSCREEN_EDITOR_HINT}.`)
+  }
+  if (state.offscreen) {
+    throw fail('NOT_VISIBLE', `type cannot write into ${described}: it stays outside the viewport after scrolling to it, so no real input can land. ${OFFSCREEN_EDITOR_HINT}.`)
+  }
+  if (!state.editable) {
+    throw fail('NOT_EDITABLE', `type cannot write into ${described}: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
+  }
+  if (!state.focused) {
+    throw fail('NOT_EDITABLE', `type cannot write into ${described}: the element refused focus, so a keystroke would go to another control. Click the field first, check that it is enabled, then retry.`)
+  }
+  return state
+}
+
+function typedValueDidNotLand(selector, wanted, observed) {
+  const seen = typeof observed === 'string' ? JSON.stringify(observed.slice(0, 80)) : 'nothing readable'
+  return `type did not land in ${selector}: after typing ${JSON.stringify(wanted.slice(0, 80))} the field still reads ${seen}. `
+    + 'The page may have cancelled the key events or re-rendered the node; the write did not land, so this is not reported as success. '
+    + 'Check that the target is the visible editor and is enabled, or use bsb_act action "key" text for a key-driven editor.'
+}
+
+async function typePage({ target, text, submit, frame, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const { visibility, forced } = await requireInputVisibility(tabId, 'type', forceWanted)
   await ensureLayout(tabId)
+  const wanted = String(text ?? '')
+  const finish = async (reply) => {
+    if (forced) await clearForced(tabId, forced)
+    return { ...reply, ...inputSuccess(visibility, forced) }
+  }
   if (frame) {
     const { frame: hit, contextId } = await frameContext(tabId, frame)
     const selector = resolveTarget(target)
-    const focused = await evaluateInContext(tabId, contextId, `(() => {
-      const el = ${deepFindExpr(selector)};
-      if (!el) return false;
-      el.focus();
-      return true;
-    })()`)
-    if (!focused) throw fail('TARGET_NOT_FOUND', `no field matches ${selector} in frame ${hit.url || hit.frameId}`)
-    const info = await evaluateInContext(tabId, contextId, editableInfoExpr(selector))
-    if (!info) throw fail('TARGET_NOT_FOUND', `no field matches ${selector} in frame ${hit.url || hit.frameId}`)
-    if (!info.editable) {
-      throw fail('NOT_EDITABLE', `type cannot write into <${info.tag}${info.type ? ' type=' + info.type : ''}>: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
-    }
+    const where = `frame ${hit.url || hit.frameId}`
+    await requireEditableTarget(tabId, selector, contextId, where)
     await clearAndType(tabId, text)
     const frameTyped = await ensureTyped(tabId, selector, text, contextId)
+    if (wanted.length && (typeof frameTyped.value !== 'string' || !frameTyped.value.includes(wanted))) {
+      throw fail('TYPE_NOT_APPLIED', typedValueDidNotLand(selector, wanted, frameTyped.value))
+    }
     if (submit === true) {
       const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
       await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key })
@@ -1608,24 +2031,16 @@ async function typePage({ target, text, submit, frame, tabId: hint }) {
     }
     await delay(300)
     const frameMeta = await pageMeta(tabId)
-    return { url: frameMeta?.url ?? '', title: frameMeta?.title ?? '', frameId: hit.frameId, typed: frameTyped.value ?? undefined, forced: frameTyped.forced }
+    return finish({ url: frameMeta?.url ?? '', title: frameMeta?.title ?? '', frameId: hit.frameId, typed: frameTyped.value ?? undefined, valueForced: frameTyped.forced })
   }
   const selector = resolveTarget(target)
-  const focused = await evaluate(tabId, `(() => {
-    const el = ${deepFindExpr(selector)};
-    if (!el) return false;
-    el.focus();
-    return true;
-  })()`)
-  if (!focused) throw fail('TARGET_NOT_FOUND', `no field matches ${selector}`)
-  const info = await evaluate(tabId, editableInfoExpr(selector))
-  if (!info) throw fail('TARGET_NOT_FOUND', `no field matches ${selector}`)
-  if (!info.editable) {
-    throw fail('NOT_EDITABLE', `type cannot write into <${info.tag}${info.type ? ' type=' + info.type : ''}>: it holds no text value. Use action "key" with text for a canvas or key-driven field, or set/select for a form control.`)
-  }
+  await requireEditableTarget(tabId, selector)
   // Insert as real input so every keystroke goes through the page's handlers.
   await clearAndType(tabId, text)
   const landed = await ensureTyped(tabId, selector, text)
+  if (wanted.length && (typeof landed.value !== 'string' || !landed.value.includes(wanted))) {
+    throw fail('TYPE_NOT_APPLIED', typedValueDidNotLand(selector, wanted, landed.value))
+  }
   if (submit === true) {
     const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
     await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key })
@@ -1633,7 +2048,7 @@ async function typePage({ target, text, submit, frame, tabId: hint }) {
   }
   await delay(300)
   const meta = await pageMeta(tabId)
-  return { url: meta?.url ?? '', title: meta?.title ?? '', typed: landed.value ?? undefined, forced: landed.forced }
+  return finish({ url: meta?.url ?? '', title: meta?.title ?? '', typed: landed.value ?? undefined, valueForced: landed.forced })
 }
 
 /** Resolve a click/drag endpoint from either a target/selector or a coordinate. */
@@ -1652,8 +2067,13 @@ async function pagePoint(tabId, target, px, py) {
  * Sliders, jigsaw pieces and map panes only react to a pointer stream
  * (mousedown → mousemove* → mouseup); a click at the destination does nothing.
  */
-async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps, holdMs, path, instant, tabId: hint }) {
+async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps, holdMs, path, instant, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const { visibility, forced } = await requireInputVisibility(tabId, 'drag', forceWanted)
+  const finish = async (reply) => {
+    if (forced) await clearForced(tabId, forced)
+    return { ...reply, ...inputSuccess(visibility, forced) }
+  }
   // A free-form path (press at the first point, glide through the rest, release
   // at the last) draws arcs, circles and signatures that a straight drag cannot.
   if (Array.isArray(path)) {
@@ -1679,7 +2099,7 @@ async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps, holdMs
       await send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: lastInstant.x, y: lastInstant.y, button: 'left', buttons: 0, clickCount: 1 })
       await delay(250)
       const metaInstant = await pageMeta(tabId)
-      return { url: metaInstant?.url ?? '', title: metaInstant?.title ?? '', from: capped[0], to: lastInstant, points: capped.length, instant: true, dialog: recentDialog(tabId) }
+      return finish({ url: metaInstant?.url ?? '', title: metaInstant?.title ?? '', from: capped[0], to: lastInstant, points: capped.length, instant: true, dialog: recentDialog(tabId) })
     }
     await send(tabId, 'Input.dispatchMouseEvent', press)
     await send(tabId, 'Input.dispatchMouseEvent', down)
@@ -1693,7 +2113,7 @@ async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps, holdMs
     await send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: last.x, y: last.y, button: 'left', buttons: 0, clickCount: 1 })
     await delay(250)
     const meta = await pageMeta(tabId)
-    return { url: meta?.url ?? '', title: meta?.title ?? '', from: capped[0], to: last, points: capped.length, dialog: recentDialog(tabId) }
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', from: capped[0], to: last, points: capped.length, dialog: recentDialog(tabId) })
   }
   let from = null
   let to = null
@@ -1734,7 +2154,7 @@ async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps, holdMs
   await send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 })
   await delay(250)
   const meta = await pageMeta(tabId)
-  return { url: meta?.url ?? '', title: meta?.title ?? '', from, to, steps: count, ...(frameId ? { frameId } : {}), dialog: recentDialog(tabId) }
+  return finish({ url: meta?.url ?? '', title: meta?.title ?? '', from, to, steps: count, ...(frameId ? { frameId } : {}), dialog: recentDialog(tabId) })
 }
 
 /**
@@ -1743,8 +2163,9 @@ async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps, holdMs
  * Menus, tooltips and reveal-on-hover controls only open on a real pointer
  * move; keeping the pointer there is enough to read the revealed content.
  */
-async function hoverPage({ target, text, x, y, frame, tabId: hint }) {
+async function hoverPage({ target, text, x, y, frame, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const { visibility, forced } = await requireInputVisibility(tabId, 'hover', forceWanted)
   let point = null
   let frameId = null
   let scrolled = false
@@ -1770,8 +2191,9 @@ async function hoverPage({ target, text, x, y, frame, tabId: hint }) {
   const meta = await pageMeta(tabId)
   // A null frameId is not a string, so the host tool's output schema would
   // reject the whole result. Leave the key out when the page document was hit.
-  const result = { url: meta?.url ?? '', title: meta?.title ?? '', at: point, scrolled, dialog: recentDialog(tabId) }
+  const result = { url: meta?.url ?? '', title: meta?.title ?? '', at: point, scrolled, dialog: recentDialog(tabId), ...inputSuccess(visibility, forced) }
   if (typeof frameId === 'string' && frameId) result.frameId = frameId
+  if (forced) await clearForced(tabId, forced)
   return result
 }
 
@@ -2092,35 +2514,95 @@ const CAR_MEASURE_EXPR = `(() => {
 })()`
 
 /**
- * True when the tab cannot run: its window is minimized or another tab is in
- * front. Pages with a requestAnimationFrame game loop stop advancing entirely,
- * and input sits in a queue — which from the outside looks like the page
- * ignoring the agent. The plugin never forces visibility (that would change what
- * the page believes about itself), so it reports the condition instead.
+ * The page's own visibility, or `unknown` when it cannot be read yet.
+ *
+ * `document.visibilityState` is the page's belief, not a guess about window
+ * focus: a background tab and a minimized window both report `hidden`, and both
+ * stop delivering pointer and key input. The bridge never changes that state on
+ * its own; forceActive is the named opt-in hatch.
  */
-async function pageHidden(tabId) {
+async function pageVisibility(tabId) {
   try {
-    return (await evaluate(tabId, 'document.visibilityState === "hidden"')) === true
+    const state = await evaluate(tabId, 'document.visibilityState')
+    return typeof state === 'string' ? state : 'unknown'
   } catch {
-    return false
+    return 'unknown'
   }
 }
 
+/**
+ * True when the tab cannot run: its window is minimized or another tab is in
+ * front. Pages with a requestAnimationFrame game loop stop advancing entirely,
+ * and input sits in a queue, which from the outside looks like the page ignoring
+ * the agent. The plugin never forces visibility by default, so this is used to
+ * refuse input rather than to silently queue it.
+ */
+async function pageHidden(tabId) {
+  return (await pageVisibility(tabId)) === 'hidden'
+}
+
 const HIDDEN_HINT =
-  "the tab is not visible (its window is minimized or another tab is in front), so the page's "
-  + 'animation frames are paused; this input is queued and nothing will advance until it is shown'
+  'input is delivered only while the page is visible: nothing was sent and nothing will replay. '
+  + 'Use bsb_act {action:"forceActive", mode:"hold"} to wake the page for the call, or '
+  + 'bsb_tabs {action:"use", activate:true} (which may report that it cannot unminimize the window), then retry'
+
+/** Name the page in a refusal, so the caller knows which tab it was. */
+function describePage(meta) {
+  const title = String(meta?.title ?? '').trim().slice(0, 120)
+  const url = String(meta?.url ?? '').trim()
+  if (title && url) return `"${title}" (${url})`
+  return url || (title ? `"${title}"` : 'the tracked page')
+}
+
+/**
+ * Input is only meaningful while the page believes it is visible.
+ *
+ * A hidden tab does not drop trusted input: the browser holds it and delivers it
+ * when the tab is surfaced, possibly against a DOM that has moved on since the
+ * call returned. That made a click report `clicks: 1` while nothing happened,
+ * then fire seconds later on a different page state. Every input action
+ * therefore asks this first, and a refusal is a typed error that says nothing
+ * was applied. The per-action `forceActive:true` opt-in still works: it wakes
+ * the page for this call only, and the reply reports what was forced and the
+ * visibility the page then observed.
+ */
+async function requireInputVisibility(tabId, action, forceWanted) {
+  let visibility = await pageVisibility(tabId)
+  let forced
+  let forceError
+  if (visibility === 'hidden' && forceWanted) {
+    try {
+      forced = await forceActive(tabId)
+    } catch (error) {
+      forceError = String(error?.message || error)
+    }
+    visibility = await pageVisibility(tabId)
+  }
+  if (visibility !== 'hidden') return { visibility, forced }
+  const meta = await pageMeta(tabId).catch(() => null)
+  let message =
+    `${action} was not applied: ${describePage(meta)} is hidden (document.visibilityState is "hidden"; `
+    + 'its window is minimized or another tab is in front), and the browser holds pointer and key input '
+    + `for hidden pages. ${HIDDEN_HINT}.`
+  if (forceError) message += ` The per-action forceActive attempt failed: ${forceError}.`
+  throw fail('TAB_NOT_VISIBLE', message)
+}
+
+/** Success fields every applied input action now carries. */
+const inputSuccess = (visibility, forced) => ({
+  applied: true,
+  visibility,
+  hidden: visibility === 'hidden',
+  ...(forced ? { forced: { ...forced, cleared: true } } : {}),
+})
 
 async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, target, modifiers, forceActive: forceWanted, measure, settle, tabId: hint }) {
   const tabId = await requirePage(hint)
   // forceActive:true is the escape hatch for a page whose frame clock has
   // stopped (a sleeping display leaves the tab "hidden" and rAF paused, so
-  // input queues and nothing advances). It is never installed on attach and it
-  // never happens silently: the reply carries what was forced and the caveat.
-  let forced
-  if (forceWanted) {
-    const visibility = await evaluate(tabId, 'document.visibilityState').catch(() => null)
-    if (visibility === 'hidden') forced = await forceActive(tabId)
-  }
+  // input would be held). It is never installed on attach and it never happens
+  // silently: the reply carries what was forced and the visibility observed.
+  const { visibility, forced } = await requireInputVisibility(tabId, 'key', forceWanted)
   // Text mode: one real key event per character. Canvas games read keydown and
   // cannot be typed into by assigning value, so expanding a string into steps
   // by hand costs one JSON object per character.
@@ -2133,20 +2615,43 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     }
     const chars = Array.from(text).slice(0, 1000)
     const gap = Math.min(Math.max(Number(keyDelayMs) || 40, 8), 500)
+    let tabs = 0
+    let enters = 0
     for (const ch of chars) {
-      const spec = keySpec(ch)
-      const name = spec?.key ?? ch
+      // A tab or newline in the text is a navigation key, not a printable
+      // character: spreadsheet-style editing needs real Tab/Enter keydowns and a
+      // keyUp for each. Anything else in the C0/DEL range has no honest mapping,
+      // so it is refused instead of typed as a control character that no page
+      // treats as a key.
+      let control = null
+      if (ch === '\t') {
+        control = KEY_MAP.Tab
+        tabs += 1
+      } else if (ch === '\n' || ch === '\r') {
+        control = KEY_MAP.Enter
+        enters += 1
+      } else if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(ch)) {
+        const point = 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')
+        throw fail('BAD_ARGUMENT', `key text cannot map control character ${point}: use "\\t" for Tab, "\\n" or "\\r" for Enter, or pass the key by name`)
+      }
+      const spec = control ?? keySpec(ch)
       const base = {
-        key: name,
+        key: spec?.key ?? ch,
         ...(spec?.code ? { code: spec.code } : {}),
         ...(Number.isFinite(spec?.vk) ? { windowsVirtualKeyCode: spec.vk, nativeVirtualKeyCode: spec.vk } : {}),
       }
-      await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...base, text: ch, unmodifiedText: ch })
+      const printable = spec?.text ?? (control ? undefined : ch)
+      const textPayload = printable !== undefined ? { text: printable, unmodifiedText: printable } : {}
+      await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...base, ...textPayload })
       await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base })
       await delay(gap)
     }
     const meta = await pageMeta(tabId)
-    return { url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length, modifiers: [] }
+    if (forced) await clearForced(tabId, forced)
+    return {
+      url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length,
+      tabs, enters, modifiers: [], ...inputSuccess(visibility, forced),
+    }
   }
   const specFor = (raw) => {
     const name = String(raw ?? '').trim()
@@ -2345,13 +2850,11 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       measurement = { error: String(error?.message || error) }
     }
   }
-  const hidden = await pageHidden(tabId)
   if (forced) await clearForced(tabId, forced)
   return {
     url: meta?.url ?? '', title: meta?.title ?? '', key: label, times, modifiers: mask, steps: stepList.length,
     measure: measurement, until: untilResults.length ? untilResults : undefined, dialog: recentDialog(tabId),
-    hidden, hint: hidden && !forced ? HIDDEN_HINT : undefined,
-    forced: forced ? { ...forced, cleared: true } : undefined,
+    ...inputSuccess(visibility, forced),
   }
 }
 
@@ -2671,7 +3174,7 @@ const networkTest = (pattern) => {
   return (url) => url.includes(pattern)
 }
 
-async function waitForCore({ selector, text, url, network, expression, gone, enabled, stable, stableMs, timeoutMs, pollMs, tabId: hint }) {
+async function waitForCore({ selector, text, url, network, expression, gone, enabled, visible, stable, stableMs, timeoutMs, pollMs, tabId: hint }) {
   const tabId = await requirePage(hint)
   const limit = Math.min(Math.max(Number(timeoutMs) || 10000, 200), 25000)
   const poll = Math.min(Math.max(Number(pollMs) || 150, 10), 1000)
@@ -2707,12 +3210,21 @@ async function waitForCore({ selector, text, url, network, expression, gone, ena
       await delay(poll)
     }
   }
+  const cached = navOutcome(tabId)
+  const askedUrl = typeof cached?.requestedUrl === 'string' ? cached.requestedUrl : ''
+  const askedDocument = typeof cached?.documentUrl === 'string' ? cached.documentUrl : ''
+  const cachedUrlHit = typeof url === 'string' && url.length > 0 && (
+    (askedUrl.length > 0 && askedUrl.includes(url)) || (askedDocument.length > 0 && askedDocument.includes(url))
+  )
+  let navigationError = String(cached?.navigationError ?? '')
+  let failedAt = navigationError.length > 0 ? started : 0
   const probe = `(() => {
     const selector = ${JSON.stringify(typeof selector === 'string' ? selector : '')};
     const text = ${JSON.stringify(typeof text === 'string' ? text : '')};
     const url = ${JSON.stringify(typeof url === 'string' ? url : '')};
     const gone = ${gone === true ? 'true' : 'false'};
     const wantEnabled = ${enabled === true ? 'true' : 'false'};
+    const wantVisible = ${visible === true ? 'true' : 'false'};
     let exprOk = true;
     let exprValue = '';
     ${typeof expression === 'string' && expression.trim() ? `try { const v = (${expression}); exprOk = !!v; exprValue = (typeof v === 'object' ? JSON.stringify(v) : String(v)).slice(0, 300); } catch (e) { exprOk = false; exprValue = String((e && e.message) || e).slice(0, 300); }` : ''}
@@ -2728,20 +3240,56 @@ async function waitForCore({ selector, text, url, network, expression, gone, ena
     };
     const el = selector ? walk(selector, document) : null;
     const hit = selector ? !!el : true;
-    const selectorOk = gone ? !hit : hit;
+    const box = el ? (() => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } })() : null;
+    // A node can exist and still be invisible: zero-size box, display:none or
+    // visibility:hidden on itself or an ancestor, or inside an aria-hidden root.
+    // A wait that ignores that matches a splash skeleton the caller cannot use.
+    const ariaHidden = el ? !!el.closest('[aria-hidden="true"]') : false;
+    let styleHidden = false;
+    if (el) {
+      let node = el;
+      while (node && node.nodeType === 1) {
+        const style = getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') { styleHidden = true; break; }
+        node = node.parentElement;
+      }
+    }
+    const boxVisible = !!box && box.width > 0 && box.height > 0;
+    const matchedVisibility = el ? ((boxVisible && !styleHidden && !ariaHidden) ? 'visible' : 'hidden') : undefined;
+    const visibleOk = wantVisible ? (hit && matchedVisibility === 'visible') : true;
+    const selectorOk = gone ? !hit : (hit && visibleOk);
+    const sample = (((document.body && document.body.innerText) || '').slice(0, 400));
     const textOk = text ? (((document.body && document.body.innerText) || '').includes(text)) : true;
-    const urlOk = url ? location.href.includes(url) : true;
+    const urlOk = url ? (location.href.includes(url) || document.title.includes(url)) : true;
     const disabled = !!(el && (el.disabled === true || el.getAttribute('aria-disabled') === 'true'));
     const enabledOk = wantEnabled ? (hit && !disabled) : true;
-    const box = el ? (() => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } })() : null;
+    const printed = /\\bHTTP ERROR\\s+(\\d{3})\\b/i.exec(sample);
+    const errorCode = /\\b(ERR_[A-Z0-9_]+)\\b/.exec(sample);
+    const failedDocument = /^chrome-error:/i.test(location.href);
+    const printedStatus = printed ? Number(printed[1]) : 0;
     return {
       ok: selectorOk && textOk && urlOk && enabledOk && exprOk,
+      selectorOk,
+      textOk,
+      urlOk,
+      enabledOk,
+      exprOk,
       url: location.href,
       title: document.title,
-      sample: (((document.body && document.body.innerText) || '').slice(0, 400)),
+      sample,
       box,
+      matchedVisibility,
+      ariaHidden,
       disabled,
       exprValue,
+      failedDocument,
+      httpStatus: (() => {
+        if (failedDocument && printedStatus) return printedStatus;
+        const entry = performance.getEntriesByType('navigation')[0];
+        const measured = Number(entry && entry.responseStatus) || 0;
+        return measured || printedStatus;
+      })(),
+      errorCode: errorCode ? errorCode[1] : '',
     };
   })()`
   const settleMs = Math.max(0, Math.min(10000, Number(stableMs) || 400))
@@ -2757,7 +3305,32 @@ async function waitForCore({ selector, text, url, network, expression, gone, ena
       // Navigation in flight: the isolated world is destroyed; rebuild it.
       probeContext = null
     }
-    if (state?.ok) {
+    // A navigation that already failed can never satisfy the wait. From the
+    // moment the failure is visible (cached outcome, or the committed
+    // chrome-error document), give the page a short grace and then answer with
+    // the error instead of burning the full timeout.
+    if (navigationError && state?.url && state.failedDocument !== true && state.url !== askedDocument) {
+      // The tab navigated away from the failed document since the error was
+      // cached (a manual reload, or another tool recovered it). The old error
+      // must not fail this wait.
+      navigationError = ''
+      failedAt = 0
+    }
+    if (!failedAt && (state?.failedDocument === true || /^chrome-error:/i.test(String(state?.url ?? '')))) {
+      failedAt = Date.now()
+    }
+    // A failed document must never satisfy a wait. A chrome-error page keeps the
+    // requested host in its title, so url: would otherwise match the URL that
+    // just failed and hide the navigation error behind a success shape.
+    const documentFailed = state?.failedDocument === true
+      || /^chrome-error:/i.test(String(state?.url ?? ''))
+      || Boolean(navigationError)
+    const cacheOk = cachedUrlHit && !navigationError && state?.failedDocument !== true
+    const okNow = !documentFailed && state?.selectorOk && state?.textOk && (state?.urlOk || cacheOk) && state?.enabledOk && state?.exprOk
+    if (okNow) {
+      const matchBox = state.box ? { matchedBox: state.box } : {}
+      const matchVisibility = selector ? { matchedVisibility: state.matchedVisibility } : {}
+      const ariaHidden = state.ariaHidden ? { ariaHidden: true } : {}
       if (stable === true) {
         const box = state.box
         const same = box && lastBox &&
@@ -2773,25 +3346,70 @@ async function waitForCore({ selector, text, url, network, expression, gone, ena
             url: state.url,
             title: state.title,
             text: state.sample,
-            box,
+            ...(state.box ? { box: state.box } : {}),
+            ...matchBox,
+            ...matchVisibility,
+            ...ariaHidden,
             settled: true,
             expressionValue: state.exprValue,
             dialog: recentDialog(tabId),
           }
         }
       } else {
-        return { matched: true, elapsedMs: Date.now() - started, url: state.url, title: state.title, text: state.sample, ...(state.box ? { box: state.box } : {}), expressionValue: state.exprValue, dialog: recentDialog(tabId) }
+        return {
+          matched: true,
+          elapsedMs: Date.now() - started,
+          url: state.url,
+          title: state.title,
+          text: state.sample,
+          ...(state.box ? { box: state.box } : {}),
+          ...matchBox,
+          ...matchVisibility,
+          ...ariaHidden,
+          expressionValue: state.exprValue,
+          dialog: recentDialog(tabId),
+        }
       }
     }
-    if (Date.now() - started >= limit) {
-      return {
+    const status = Number(state?.httpStatus) > 0
+      ? Number(state.httpStatus)
+      : Number(cached?.httpStatus) > 0 ? Number(cached.httpStatus) : 0
+    const documentUrl = String(state?.url ?? cached?.documentUrl ?? '')
+    const errorNow = navigationError || state?.errorCode || (status > 0 && (state?.failedDocument === true) ? 'HTTP ' + status : '')
+    const failedNow = Boolean(errorNow) || state?.failedDocument === true || /^chrome-error:/i.test(documentUrl)
+    if (Date.now() - started >= limit || (failedAt > 0 && Date.now() - failedAt >= 1200)) {
+      const missing = failedNow || (failedAt > 0)
+      const hint = missing
+        ? documentHint(
+            {
+              url: documentUrl,
+              title: state?.title ?? '',
+              httpStatus: status,
+              errorCode: state?.errorCode ?? '',
+              failedDocument: state?.failedDocument === true || /^chrome-error:/i.test(documentUrl),
+            },
+            { requestedUrl: askedUrl || cached?.requestedUrl, navigationError: errorNow },
+          )
+        : state?.matchedVisibility === 'hidden'
+          ? 'selector ' + JSON.stringify(String(selector)) + ' matched a hidden node (zero-size box or aria-hidden ancestor). Pass visible:true to require a visible match, or wait for the content to render.'
+          : undefined
+      const out = {
         matched: false,
         elapsedMs: Date.now() - started,
-        url: state?.url ?? '',
+        url: documentUrl,
         title: state?.title ?? '',
         text: state?.sample ?? '',
+        ...(documentUrl ? { documentUrl } : {}),
+        ...(state?.matchedVisibility ? { matchedVisibility: state.matchedVisibility } : {}),
+        ...(state?.box ? { matchedBox: state.box } : {}),
+        ...(state?.ariaHidden ? { ariaHidden: true } : {}),
+        ...(errorNow ? { navigationError: errorNow } : {}),
+        ...(status > 0 ? { httpStatus: status } : {}),
+        ...(state?.expressionValue !== undefined ? { expressionValue: state.exprValue } : {}),
+        ...(hint ? { hint } : {}),
         dialog: recentDialog(tabId),
       }
+      return out
     }
     await delay(poll)
   }
@@ -3940,11 +4558,22 @@ async function screenshotPage({ fullPage, selector, rect, scale, frame, tabId: h
   // measuring anything here.
   await sweepMetrics(recorder?.tabId ?? null)
   const origin = await evaluate(tabId, '({ x: Math.round(window.scrollX), y: Math.round(window.scrollY) })').catch(() => null)
+  // A hidden tab normally keeps a real layout viewport (innerWidth/innerHeight
+  // stay 1912x970 for a minimized window), and that is exactly the case this
+  // capture path renders off-screen without activating anything. A genuinely
+  // 0x0 layout viewport has no pixels to render, so it fails rather than
+  // returning a blank or invented image.
+  const layoutView = await evaluate(tabId, '({ width: window.innerWidth, height: window.innerHeight })').catch(() => null)
+  if (!layoutView || !(Number(layoutView.width) > 0) || !(Number(layoutView.height) > 0)) {
+    throw fail('TAB_NOT_VISIBLE', 'capture needs a laid-out viewport, but the page reports a 0x0 layout (the window is minimized or not laid out). Restore the window and retry. A hidden tab with a normal layout viewport is captured off-screen without activation.')
+  }
+  const visibility = await pageVisibility(tabId)
+  const hidden = visibility === 'hidden'
   const prep = await prepareShot({ fullPage, selector, rect, scale, frame, tabId })
   // A capture never activates a tab or raises a window. A hidden page is shot
   // through captureBeyondViewport instead, which renders it without a compositor
-  // frame and without changing what the user sees.
-  const hidden = (await evaluate(prep.tabId, 'document.visibilityState').catch(() => null)) === 'hidden'
+  // frame and without changing what the user sees. `hidden` and `visibility` are
+  // reported so a caller can tell a background render from an on-screen one.
   const meta = await pageMeta(prep.tabId)
   try {
   const count = Math.min(Math.max(Math.trunc(Number(frames)) || 1, 1), 24)
@@ -3953,7 +4582,7 @@ async function screenshotPage({ fullPage, selector, rect, scale, frame, tabId: h
     const png = await preprocessPng(raw, preprocess)
     const size = pngSize(png)
     const scale = prep.target && prep.target.width > 0 ? size.width / prep.target.width : undefined
-    return { url: meta?.url ?? '', title: meta?.title ?? '', width: size.width, height: size.height, scale, pngBase64: png, frameId: prep.frameId, preprocessed: png !== raw || undefined }
+    return { url: meta?.url ?? '', title: meta?.title ?? '', width: size.width, height: size.height, scale, pngBase64: png, frameId: prep.frameId, preprocessed: png !== raw || undefined, hidden, visibility }
   }
   const gap = Math.min(Math.max(Math.trunc(Number(intervalMs)) || 150, 0), 2000)
   const shots = []
@@ -3977,6 +4606,8 @@ async function screenshotPage({ fullPage, selector, rect, scale, frame, tabId: h
     intervalMs: gap,
     frameWidth: first.width,
     frameHeight: first.height,
+    hidden,
+    visibility,
   }
   } finally {
     if (origin) {
@@ -4221,8 +4852,9 @@ async function dropAt(tabId, point, files, text, mimeType, frameId) {
     dialog: recentDialog(tabId),
   }}
 
-async function dropPage({ target, x, y, files, text, mimeType, frame, tabId: hint }) {
+async function dropPage({ target, x, y, files, text, mimeType, frame, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const { visibility, forced } = await requireInputVisibility(tabId, 'drop', forceWanted)
   let frameId
   if (frame) {
     throw fail('UNSUPPORTED', 'drag-and-drop into a child frame is not supported: Chrome DevTools drag events are dispatched to the top-level renderer and do not enter subframes')
@@ -4238,8 +4870,9 @@ async function dropPage({ target, x, y, files, text, mimeType, frame, tabId: hin
   } else {
     throw fail('BAD_ARGUMENT', 'drop needs a target or x/y')
   }
-  return await dropAt(tabId, point, files, text, mimeType)
-
+  const dropped = await dropAt(tabId, point, files, text, mimeType)
+  if (forced) await clearForced(tabId, forced)
+  return { ...dropped, ...inputSuccess(visibility, forced) }
 }
 
 /**
@@ -4745,8 +5378,33 @@ async function inspectPage({ selector, offset, limit, text: withText, href: with
     for (const el of nodes.slice(${skip}, ${skip + cap})) {
       const r = el.getBoundingClientRect()
       const rec = { i: out.length + 1, tag: el.tagName.toLowerCase(), x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
-      if (${want.text}) { const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim(); if (t) rec.text = t.slice(0, 240) }
-      if (${want.href}) { const h = el.getAttribute('href'); if (h) rec.href = el.href }
+      // Zero-size wrappers are real matches that the page does not paint. Say so
+      // with the element's own box instead of reading text or another row's box.
+      const rendered = r.width > 0 && r.height > 0
+      if (!rendered) rec.visible = false
+      if (rendered && ${want.text}) {
+        // innerText is the visible text. textContent would emit inline <script>
+        // and <style> source from wrappers whose innerText is empty.
+        const t = (typeof el.innerText === 'string' ? el.innerText : '').replace(/\\s+/g, ' ').trim()
+        if (t) { rec.text = t.slice(0, 240); if (t.length > 240) rec.textTruncated = true }
+      }
+      if (${want.href}) {
+        if (el.matches('a[href]')) {
+          // An anchor row keeps its own resolved href, whatever scheme it uses.
+          const own = typeof el.href === 'string' ? el.href : el.getAttribute('href')
+          if (own) rec.href = own
+        } else {
+          // A card wrapper owns no href; the first descendant http(s) link is the
+          // row's destination (SERP result blocks look exactly like this).
+          let mail = ''
+          for (const link of el.querySelectorAll('a[href]')) {
+            const url = typeof link.href === 'string' ? link.href : (link.getAttribute('href') || '')
+            if (/^https?:/i.test(url)) { rec.href = url; rec.hrefSource = 'descendant'; break }
+            if (!mail && /^mailto:/i.test(url)) mail = url
+          }
+          if (!rec.href && mail) { rec.href = mail; rec.hrefSource = 'descendant' }
+        }
+      }
       if (${want.image}) { const im = el.matches('img') ? el : el.querySelector('img'); if (im) rec.image = im.currentSrc || im.src || im.getAttribute('src') || '' }
       if (${want.state}) {
         const control = el.matches('input,select,textarea,option') ? el : el.querySelector('input,select,textarea')
@@ -4761,7 +5419,18 @@ async function inspectPage({ selector, offset, limit, text: withText, href: with
       }
       out.push(rec)
     }
-    return { count: nodes.length, shown: out.length, offset: ${skip}, items: out }
+    const reply = { count: nodes.length, shown: out.length, offset: ${skip}, items: out }
+    // An empty rows reply on a canvas app reads as "empty content". Name the
+    // canvas instead so a caller switches to capture or pixel sampling.
+    if (nodes.length === 0) {
+      const canvases = document.querySelectorAll('canvas')
+      if (canvases.length > 0) {
+        reply.canvas = true
+        reply.canvasCount = canvases.length
+        reply.hint = 'no DOM rows matched, but the page contains a canvas, so it is probably canvas-rendered; an empty rows reply does not mean the content is empty. Use bsb_capture or bsb_pixels to read it.'
+      }
+    }
+    return reply
   })()`
   const value = await evaluate(tabId, expression)
   return { url: (await pageMeta(tabId))?.url ?? '', selector: sel, ...(value || { count: 0, shown: 0, items: [] }) }
@@ -4959,27 +5628,123 @@ async function listTabs({ action, tabId: hint } = {}) {
   // is the real thing, and it is what a dev loop needs after every edit.
   if (action === 'reload') {
     const id = typeof hint === 'number' ? hint : await requirePage()
-    await send(id, 'Page.reload', { ignoreCache: true })
-    await waitReady(id, 8000).catch(() => undefined)
-    await delay(200)
-    const meta = await pageMeta(id)
-    return { reloaded: true, tabId: id, url: meta?.url ?? '', title: meta?.title ?? '' }
+    const tab = await chrome.tabs.get(id).catch(() => undefined)
+    if (!tab) throw fail('NO_TAB', 'no tab with id ' + id)
+    if (isInternalUrl(tab.url)) {
+      throw fail('TAB_NOT_SCRIPTABLE', 'tab ' + id + ' is ' + String(tab.url ?? '') + ', a browser-internal page bsb cannot reload; call bsb_open with the http(s) URL (newTab:true also opens a fresh tab).')
+    }
+    const before = navOutcome(id) ?? {}
+    const requestedUrl = typeof before.requestedUrl === 'string' ? before.requestedUrl : ''
+    let reloadError = ''
+    try {
+      await send(id, 'Page.reload', { ignoreCache: true })
+    } catch (error) {
+      reloadError = String(error?.message ?? error)
+    }
+    if (!reloadError) {
+      await waitReady(id, 8000).catch(() => undefined)
+      await delay(200)
+    }
+    const state = await pageState(id).catch(() => null)
+    const meta = await pageMeta(id).catch(() => null)
+    const documentUrl = String(state?.url ?? meta?.url ?? tab.url ?? '')
+    const failedDocument = state?.failedDocument === true || /^chrome-error:/i.test(documentUrl)
+    const status = Number(state?.httpStatus) > 0
+      ? Number(state.httpStatus)
+      : Number(before.httpStatus) > 0 ? Number(before.httpStatus) : 0
+    // Page.reload returns no navigation outcome of its own, so on an error page
+    // the document's own ERR_/HTTP status is the freshest reason; the cached one
+    // from the navigation that failed is the fallback.
+    const navigationError = failedDocument
+      ? String(state?.errorCode || before.navigationError || reloadError || '')
+      : reloadError
+    // "reloaded" means a real document is now in the tab: a chrome-error page or
+    // a refused reload is a failure, even though Page.reload itself succeeded.
+    const reloaded = Boolean(state) && !failedDocument && !reloadError
+    if (documentUrl || navigationError) {
+      rememberNav(id, {
+        ...(requestedUrl ? { requestedUrl } : {}),
+        documentUrl,
+        ...(status > 0 ? { httpStatus: status } : {}),
+        ...(navigationError ? { navigationError } : {}),
+      })
+    }
+    let reloadHint
+    if (!reloaded) {
+      reloadHint = failedDocument
+        ? documentHint(
+            { url: documentUrl, title: state?.title ?? '', httpStatus: status, failedDocument: true, errorCode: state?.errorCode ?? '' },
+            { requestedUrl, navigationError: navigationError || reloadError },
+          )
+        : 'reload failed' + (reloadError ? ': ' + reloadError : '') + '. No readable document loaded; call bsb_open with the URL to recover the tab.'
+    } else {
+      reloadHint = documentHint(state, { requestedUrl, navigationError: '' })
+    }
+    return {
+      reloaded,
+      tabId: id,
+      url: documentUrl,
+      title: String(state?.title ?? meta?.title ?? ''),
+      ...(requestedUrl ? { requestedUrl } : {}),
+      ...(documentUrl ? { documentUrl } : {}),
+      ...(status > 0 ? { httpStatus: status } : {}),
+      ...(navigationError ? { navigationError } : {}),
+      ...(state?.readyState ? { readyState: state.readyState } : {}),
+      ...(reloadHint ? { hint: reloadHint } : {}),
+    }
   }
   const tabs = await chrome.tabs.query({})
   const tracked = await getTrackedId()
-  return {
-    tabs: tabs
-      .filter((tab) => typeof tab.id === 'number')
-      .map((tab) => ({
-        tabId: tab.id,
-        title: tab.title ?? '',
-        url: tab.url ?? '',
-        active: tab.active === true,
-        current: tab.id === tracked,
-      }))
-      .slice(0, 200),
+  const rows = []
+  for (const tab of tabs) {
+    if (typeof tab.id !== 'number') continue
+    const cached = navOutcome(tab.id) ?? {}
+    let state = null
+    // Only the tracked tab is read live: attaching to every tab would be
+    // invasive, and a background tab's own url is already its document URL.
+    if (tab.id === tracked && !isInternalUrl(tab.url)) {
+      state = await pageState(tab.id).catch(() => null)
+    }
+    const documentUrl = String(state?.url ?? tab.url ?? '')
+    // A cached failure describes the last navigation this worker drove, so it is
+    // trusted only while the document still is that error page: a manual reload
+    // or a navigation from elsewhere makes it stale.
+    const failedDocument = state?.failedDocument === true
+      || /^chrome-error:/i.test(documentUrl)
+      || (!state && /^chrome-error:/i.test(String(cached.documentUrl ?? '')))
+    const navigationError = String(state?.errorCode ?? (failedDocument ? cached.navigationError ?? '' : ''))
+    const requestedUrl = typeof cached.requestedUrl === 'string' ? cached.requestedUrl : ''
+    const status = Number(state?.httpStatus) > 0
+      ? Number(state.httpStatus)
+      : Number(cached.httpStatus) > 0 ? Number(cached.httpStatus) : 0
+    const internal = isInternalUrl(documentUrl)
+    rows.push({
+      tabId: tab.id,
+      title: String(state?.title ?? tab.title ?? ''),
+      // The real document URL, not the URL that was requested for it.
+      url: documentUrl,
+      active: tab.active === true,
+      current: tab.id === tracked,
+      scriptable: !internal,
+      documentUrl,
+      ...(requestedUrl && requestedUrl !== documentUrl ? { requestedUrl } : {}),
+      ...(navigationError ? { navigationError } : {}),
+      ...(status > 0 ? { httpStatus: status } : {}),
+      ...(failedDocument ? { navigationFailed: true } : {}),
+      ...(internal ? { notScriptable: true } : {}),
+    })
   }
+  return { tabs: rows.slice(0, 200) }
 }
+
+/**
+ * What the page reports about its own visibility and window box. Read-only: a
+ * minimized window is reported here, never restored by this plugin.
+ */
+const readVisibility = (tabId) => evaluate(
+  tabId,
+  '({ visibility: document.visibilityState, hidden: document.hidden === true, outer: { width: outerWidth || 0, height: outerHeight || 0 } })',
+).catch(() => null)
 
 /** Adopt an existing tab instead of opening one. */
 async function useExistingTab({ tabId, activate }) {
@@ -4987,17 +5752,78 @@ async function useExistingTab({ tabId, activate }) {
   if (!Number.isInteger(id)) throw fail('BAD_ARGUMENT', 'tabId must be a number')
   const tab = await chrome.tabs.get(id).catch(() => undefined)
   if (!tab) throw fail('NO_TAB', `no tab with id ${id}`)
-  if (activate !== false) await chrome.tabs.update(tab.id, { active: true }).catch(() => undefined)
-  // Attach BEFORE tracking. Adopting a tab the debugger cannot reach — chrome://,
-  // another extension's page — used to set the tracked slot first and throw on
-  // the attach afterwards, so the browser was left pointing at an unreadable page
-  // and every later command failed with "Cannot access a chrome:// URL" until
-  // some other tab was adopted. A refused adoption must change nothing.
-  await attach(tab.id)
+  // A browser-internal tab cannot be attached to. Name the offending tab and the
+  // one parameter that works, instead of surfacing DevTools' string with no tab
+  // id, which reads like the caller's own URL was refused.
+  if (isInternalUrl(tab.url)) {
+    throw fail('TAB_NOT_SCRIPTABLE', 'tab ' + id + ' is ' + String(tab.url ?? '') + ', a browser-internal page bsb cannot script; call bsb_open with the http(s) URL and newTab:true to open a scriptable tab.')
+  }
+  // Attach BEFORE tracking or activating. Adopting a tab the debugger cannot
+  // reach used to set the tracked slot first and throw on the attach afterwards,
+  // so the browser was left pointing at an unreadable page and every later
+  // command failed with "Cannot access a chrome:// URL" until some other tab was
+  // adopted. A refused adoption must change nothing.
+  try {
+    await attach(tab.id)
+  } catch (error) {
+    if (/^chrome-error:/i.test(String(tab.url ?? ''))) {
+      throw fail('ERROR_PAGE', 'tab ' + id + ' is showing a Chrome error page (' + tab.url + '); call bsb_open with the target URL to recover it.')
+    }
+    throw error
+  }
   await trackId(tab.id)
   refs = new Map()
-  const meta = await pageMeta(tab.id)
-  return { tabId: tab.id, url: meta?.url ?? tab.url ?? '', title: meta?.title ?? tab.title ?? '' }
+  let view = await readVisibility(tab.id)
+  // activate defaults to true. Report what the page saw, not only what was
+  // asked: a minimized window keeps document.visibilityState hidden even after
+  // the tab is made active, and this tool never restores or raises windows.
+  if (activate !== false) {
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => undefined)
+    const until = Date.now() + 1200
+    for (;;) {
+      view = await readVisibility(tab.id)
+      if (view?.visibility === 'visible' || Date.now() >= until) break
+      await delay(100)
+    }
+  }
+  const state = await pageState(tab.id).catch(() => null)
+  const meta = await pageMeta(tab.id).catch(() => null)
+  const documentUrl = String(state?.url ?? meta?.url ?? tab.url ?? '')
+  const cached = navOutcome(tab.id) ?? {}
+  const failedDocument = state?.failedDocument === true || /^chrome-error:/i.test(documentUrl)
+  const navigationError = String(state?.errorCode ?? (failedDocument ? cached.navigationError ?? '' : ''))
+  const status = Number(state?.httpStatus) > 0 ? Number(state.httpStatus) : 0
+  const hidden = view?.visibility !== 'visible'
+  const activated = activate !== false && !hidden
+  const out = {
+    tabId: tab.id,
+    url: documentUrl,
+    title: String(state?.title ?? meta?.title ?? tab.title ?? ''),
+    documentUrl,
+    scriptable: true,
+    activated,
+    visibility: view?.visibility ?? 'unknown',
+    hidden,
+    ...(cached.requestedUrl ? { requestedUrl: String(cached.requestedUrl) } : {}),
+    ...(navigationError ? { navigationError } : {}),
+    ...(status > 0 ? { httpStatus: status } : {}),
+  }
+  if (!activated) {
+    if (activate === false) {
+      out.reason = 'activate:false was passed, so the tab was adopted in the background'
+    } else {
+      const info = await windowInfo(tab.id)
+      const outer = view?.outer ?? { width: 0, height: 0 }
+      const width = Number(outer.width) || 0
+      const height = Number(outer.height) || 0
+      out.window = { state: info?.state ?? 'unknown', focused: info?.focused === true, width, height }
+      const minimized = info?.state === 'minimized' || (width === 0 && height === 0)
+      out.reason = minimized
+        ? 'the window is minimized (outer ' + width + 'x' + height + ') so the page stayed hidden after activation; bsb does not restore or raise windows. Restore the window yourself, or use bsb_act forceActive mode:"hold" when the page only needs a live frame clock.'
+        : 'document.visibilityState stayed ' + (view?.visibility ?? 'unknown') + ' after activating the tab; the page did not become visible.'
+    }
+  }
+  return out
 }
 
 async function closePage() {
@@ -5025,6 +5851,7 @@ chrome.runtime.onInstalled.addListener(() => { void startLoop() })
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   attached.delete(tabId)
+  navOutcomes.delete(tabId)
   if (detachTimer) {
     clearTimeout(detachTimer)
     detachTimer = undefined

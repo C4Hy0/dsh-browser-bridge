@@ -337,6 +337,33 @@ try {
   assert.ok(/fields: \{ type: 'array'/.test(toolsSource), 'bsb_observe does not document fields')
   console.log('ok  eval tab targeting, result spilling and network projection are pinned')
 
+  // Reading guards from the SERP, Facebook timestamp and Sheets canvas tickets.
+  // The rows reply used to leak inline script as text, drop every descendant
+  // link, cut text without a marker and read a canvas app as an empty page; text
+  // mode returned an anti-scrape timestamp as a column of one-character lines.
+  {
+    const inspectBody = workerSource.slice(workerSource.indexOf('async function inspectPage'), workerSource.indexOf('async function networkPage'))
+    const snapshotBody = workerSource.slice(workerSource.indexOf('function snapshotPage'), workerSource.indexOf('function deepFindExpr'))
+    assert.ok(/typeof el\.innerText === 'string'/.test(inspectBody), 'rows text still falls back past innerText')
+    assert.ok(!/\.textContent/.test(inspectBody), 'rows text reads textContent again')
+    assert.ok(/rec\.textTruncated = true/.test(inspectBody), 'a cut row text is unmarked again')
+    assert.ok(/rec\.visible = false/.test(inspectBody), 'a zero-size row is not marked invisible')
+    assert.ok(/el\.matches\('a\[href\]'\)/.test(inspectBody), 'rows href stopped keeping an anchor row own link')
+    assert.ok(/querySelectorAll\('a\[href\]'\)/.test(inspectBody), 'rows href stopped resolving descendant anchors')
+    assert.ok(/hrefSource = 'descendant'/.test(inspectBody), 'rows href stopped saying it came from a descendant')
+    assert.ok(/reply\.canvasCount = canvases\.length/.test(inspectBody), 'a canvas-only page no longer reports its canvas count')
+    assert.ok(/bsb_capture or bsb_pixels/.test(inspectBody), 'the empty rows hint no longer says how to read a canvas')
+    assert.ok(/function snapshotPage\(maxChars, maxElements, normalize\)/.test(workerSource), 'snapshotPage lost the normalize argument')
+    assert.ok(/\\u034F\\u200B-\\u200F\\u202A-\\u202E\\uFEFF/.test(snapshotBody), 'normalize stopped stripping the zero-width character set')
+    assert.ok(/trimmed\.length === 1/.test(snapshotBody), 'normalize stopped joining one-character block lines')
+    assert.ok(/const normalized = normalize === true \? normalizeText\(full\) : full/.test(snapshotBody), 'normalize no longer runs on the full text')
+    assert.ok(/const truncated = normalized\.length > maxChars/.test(snapshotBody), 'normalize now runs after the maxChars cut')
+    assert.ok(/normalized: true/.test(snapshotBody), 'a normalized reply is not marked')
+    assert.ok(/normalize: \{ type: 'boolean'/.test(toolsSource), 'bsb_read does not document normalize')
+    assert.ok(/normalize: args\?\.normalize === true/.test(toolsSource), 'bsb_read accepts normalize but no longer forwards it')
+  }
+  console.log('ok  read extraction guards pinned (descendant href, innerText only, truncation, canvas hint, normalize)')
+
   // The friction ledger belongs to the maintainer workspace, not the public
   // plugin. Check it when present so both layouts pass.
   if (existsSync(new URL('../friction/FRICTION.md', import.meta.url))) console.log('ok  friction ledger present')
@@ -381,6 +408,113 @@ try {
   assert.ok(/TAB_NOT_VISIBLE', 'the browser window is minimised/.test(workerSource), 'a 0x0 viewport no longer asks the user to restore the window')
   console.log('ok  capture renders hidden tabs without raising a window')
 
+  // Hidden-page input guard. A background tab used to accept a click behind a
+  // success-shaped reply: the browser held the event and replayed it later
+  // against a DOM the caller had never seen. Every input action must now refuse
+  // before dispatching, and a successful action must say where it was applied.
+  {
+    const bodyOf = (name) => {
+      const start = workerSource.indexOf('async function ' + name + '(')
+      assert.ok(start > 0, 'extension/sw.js lost ' + name)
+      const next = workerSource.indexOf('\nasync function ', start + 1)
+      return workerSource.slice(start, next > start ? next : workerSource.length)
+    }
+    for (const name of ['clickPage', 'hoverPage', 'keyPage', 'typePage', 'dragPage', 'dropPage', 'wheelPage']) {
+      assert.ok(
+        /requireInputVisibility\(tabId, '/.test(bodyOf(name)),
+        name + ' can still dispatch input into a hidden page',
+      )
+    }
+    const guard = bodyOf('requireInputVisibility')
+    assert.ok(/fail\('TAB_NOT_VISIBLE'/.test(guard), 'a hidden page no longer fails with TAB_NOT_VISIBLE')
+    assert.ok(/was not applied/.test(guard), 'a hidden refusal does not say nothing was applied')
+    const hintBlock = workerSource.slice(
+      workerSource.indexOf('const HIDDEN_HINT'),
+      workerSource.indexOf('async function requireInputVisibility'),
+    )
+    assert.ok(
+      /forceActive/.test(guard) && /mode:"hold"/.test(hintBlock) && /activate:true/.test(hintBlock),
+      'a hidden refusal does not name the forceActive hold and bsb_tabs activate recovery paths',
+    )
+    assert.ok(/describePage/.test(guard) && /pageMeta/.test(guard), 'a hidden refusal does not name the page')
+    assert.ok(/nothing will replay/.test(hintBlock), 'the hidden hint does not promise that input will not replay')
+    assert.ok(!/is queued/.test(hintBlock), 'the hidden hint still describes input as queued')
+    assert.ok(
+      /applied: true/.test(workerSource) && /visibility === 'hidden'/.test(workerSource),
+      'successful input replies no longer report applied/visibility',
+    )
+    assert.ok(
+      (workerSource.match(/\.\.\.inputSuccess\(/g) ?? []).length >= 7,
+      'an input action reply dropped its applied/visibility fields',
+    )
+
+    // type: validate the target, then verify the value actually changed.
+    const typeBody = bodyOf('typePage')
+    assert.ok(/requireEditableTarget\(/.test(typeBody), 'type no longer validates the target before typing')
+    assert.ok(/TYPE_NOT_APPLIED/.test(typeBody), 'type no longer fails when the write did not land')
+    const editable = bodyOf('requireEditableTarget')
+    assert.ok(/NOT_VISIBLE/.test(editable) && /NOT_EDITABLE/.test(editable), 'target validation lost its typed errors')
+    const offscreenHint = workerSource.slice(
+      workerSource.indexOf('const OFFSCREEN_EDITOR_HINT'),
+      workerSource.indexOf('async function requireEditableTarget'),
+    )
+    assert.ok(/offscreen measurer/.test(offscreenHint), 'the offscreen-target error does not name an offscreen measurer')
+    assert.ok(/focus the visible editor first/.test(offscreenHint), 'the offscreen-target error does not tell the caller to focus the visible editor')
+    assert.ok(
+      /display is "none"/.test(editable) && /visibility is "hidden"/.test(editable),
+      'target validation no longer distinguishes display:none and visibility:hidden',
+    )
+    assert.ok(/width <= 0 \|\| state\.height <= 0/.test(editable), 'target validation no longer rejects a zero-size box')
+
+    // key text: tab/newline become real navigation keys and are counted.
+    const keyBody = bodyOf('keyPage')
+    assert.ok(
+      /KEY_MAP\.Tab/.test(keyBody) && /KEY_MAP\.Enter/.test(keyBody),
+      'key text no longer maps tab and newline to real key events',
+    )
+    assert.ok(/\btabs \+= 1/.test(keyBody) && /\benters \+= 1/.test(keyBody), 'key text no longer counts tabs and enters')
+    assert.ok(
+      /BAD_ARGUMENT/.test(keyBody) && /control character/.test(keyBody),
+      'an unmappable control character is silently dropped again',
+    )
+    assert.ok(
+      /rawTextArg/.test(toolsSource) && /text: rawTextArg\(args, 'text'\)/.test(toolsSource),
+      'key text is trimmed before control characters can be mapped',
+    )
+    // The per-action opt-in has to reach the worker for every input action.
+    for (const call of ["send('hover'", "send('type'", "send('drag'", "send('drop'", "send('wheel'"]) {
+      const line = toolsSource.split('\n').find((text) => text.includes(call)) ?? ''
+      assert.ok(
+        /forceActive: args\?\.forceActive === true/.test(line),
+        call + ') cannot opt into forceActive for one action',
+      )
+    }
+
+    // capture: hidden tabs stay capturable, the reply says which state it saw,
+    // and only a genuine 0x0 layout viewport fails.
+    const shotBody = bodyOf('screenshotPage')
+    assert.ok(/const hidden = visibility === 'hidden'/.test(shotBody), 'capture no longer reports the visibility it observed')
+    assert.ok(/hidden, visibility/.test(shotBody), 'capture reply lost hidden/visibility')
+    assert.ok(/0x0 layout/.test(shotBody), 'capture no longer fails a genuinely 0x0 layout viewport')
+    assert.ok(
+      /hidden: \{ type: 'boolean' \}/.test(toolsSource) && /visibility: \{ type: 'string' \}/.test(toolsSource),
+      'bsb_capture schema lost hidden/visibility',
+    )
+    assert.ok(
+      /record\.hidden = last\.hidden/.test(toolsSource) && /record\.visibility = last\.visibility/.test(toolsSource),
+      'bsb_capture drops hidden/visibility before the reply',
+    )
+
+    const skillText = await readFile(new URL('../skill/browser-bridge/SKILL.md', import.meta.url), 'utf8')
+    assert.ok(
+      !/minimized 0×0 window is reported as `TAB_NOT_VISIBLE`/.test(skillText),
+      'the skill still claims a minimized window capture fails',
+    )
+    assert.match(skillText, /hidden, background or minimized tab still captures/, 'the skill no longer documents hidden capture')
+    assert.match(skillText, /TYPE_NOT_APPLIED/, 'the skill no longer documents the type verification failure')
+  }
+  console.log('ok  input refuses hidden pages and type/key/capture report what landed')
+
   // Hold-to-mine: a click with holdMs must keep the button down, and every
   // click shape must forward it, or the tool reports success on a dead page.
   assert.ok(/async function pressAt\(tabId, point, count, button = 'left', holdMs = 0\)/.test(workerSource), 'pressAt lost holdMs')
@@ -406,6 +540,77 @@ try {
   // documented default unreachable.
   assert.ok(/if \(action === 'reload'\) \{\n\s*const params = \{ action: 'reload' \}/.test(toolsSource), 'bsb_tabs requires tabId for reload again')
   console.log('ok  tabs can be reloaded')
+
+  // Navigation-truth guards. A failed navigation used to read as a loaded page:
+  // bsb_open returned a success shape for a chrome-error document (HTTP 429),
+  // bsb_tabs list advertised the requested URL, reload said reloaded:true on an
+  // error page, and a wait burned its full timeout on a tab that could never
+  // load. The fix is one outcome shape (requested vs document URL, HTTP status,
+  // net error) plus a per-tab cache, carried by every navigation-reporting tool.
+  assert.ok(/const navOutcomes = new Map\(\)/.test(workerSource), 'worker lost its per-tab navigation outcome cache')
+  assert.ok(/function rememberNav\(tabId, outcome\)/.test(workerSource), 'navigation outcomes are no longer remembered')
+  assert.ok(/const navOutcome = \(tabId\) =>/.test(workerSource), 'navigation outcomes are no longer readable per tab')
+  assert.ok(/const isInternalUrl = \(url\) =>/.test(workerSource), 'worker no longer recognises browser-internal pages')
+  assert.ok(/async function pageState\(tabId\)/.test(workerSource), 'worker lost the shared page-state probe')
+  assert.ok(/function documentHint\(state,/.test(workerSource), 'worker lost the shell/error hint')
+  assert.ok(/function stateSummary\(state\)/.test(workerSource), 'bsb_read state is not shaped from the probe')
+  assert.ok(/navigated\?\.errorText/.test(workerSource), 'bsb_open drops the Page.navigate errorText')
+  assert.ok(/autoNewTabReason/.test(workerSource), 'bsb_open does not report why it opened a new tab')
+  assert.ok(/out\.autoNewTab = true/.test(workerSource), 'bsb_open no longer flags the automatic new tab')
+  assert.ok(/requestedUrl: url,\n\s*documentUrl/.test(workerSource), 'bsb_open reply does not separate requested and document URLs')
+  assert.ok(/readyState: state\?\.readyState \?\? 'unknown'/.test(workerSource), 'bsb_open reply lost readyState')
+  assert.ok(/bodyTextLen: Number\(state\?\.bodyTextLen\)/.test(workerSource), 'bsb_open reply lost bodyTextLen')
+  assert.ok(/elementCount: Number\(state\?\.elementCount\)/.test(workerSource), 'bsb_open reply lost elementCount')
+  assert.ok(/const state = await pageState\(tabId\)\.catch/.test(workerSource), 'readPage does not probe the page state')
+  assert.ok(/value\.state = stateSummary\(state\)/.test(workerSource), 'readPage replies lost the state block')
+  assert.ok(/if \(hint\) value\.hint = hint/.test(workerSource), 'readPage replies lost the hint')
+  // bsb_tabs: the real document URL and the failure markers, reload truth.
+  assert.ok(/url: documentUrl,/.test(workerSource), 'tab rows no longer report the real document URL')
+  assert.ok(/scriptable: !internal,/.test(workerSource), 'tab rows lost scriptable')
+  assert.ok(/navigationFailed: true/.test(workerSource), 'a chrome-error tab is no longer marked as failed')
+  assert.ok(/const reloaded = Boolean\(state\) && !failedDocument && !reloadError/.test(workerSource), 'reload no longer verifies the resulting document')
+  assert.ok(/TAB_NOT_SCRIPTABLE/.test(workerSource), 'a browser-internal tab no longer fails with a typed error')
+  // bsb_tabs use {activate:true} reports what the page saw.
+  assert.ok(/const activated = activate !== false && !hidden/.test(workerSource), 'use no longer reports whether the page became visible')
+  assert.ok(/visibility: view\?\.visibility \?\? 'unknown'/.test(workerSource), 'use no longer reports document visibility')
+  assert.ok(/out\.window = \{ state: info\?\.state/.test(workerSource), 'use no longer reports the window state when activation failed')
+  assert.ok(/out\.reason = minimized/.test(workerSource), 'use no longer says why a minimized window stayed hidden')
+  // bsb_wait_for: cached URL matching, visibility condition, fast failure.
+  assert.ok(/const wantVisible = \$\{visible === true \? 'true' : 'false'\};/.test(workerSource), 'waitForCore lost the visible condition')
+  assert.ok(/matchedVisibility = el \?/.test(workerSource), 'waitForCore no longer measures match visibility')
+  assert.ok(/const cachedUrlHit =/.test(workerSource), 'waitForCore does not compare the requested/document URL')
+  assert.ok(/document\.title\.includes\(url\)/.test(workerSource), 'waitForCore no longer matches the page title')
+  assert.ok(/failedAt >= 1200/.test(workerSource), 'waitForCore no longer fails fast on a known navigation error')
+  assert.ok(/navigationError: errorNow/.test(workerSource), 'waitForCore fast failure does not carry the navigation error')
+  // The tool surface must offer and render the new fields, not only the worker.
+  assert.ok(/matchedVisibility: \{ type: 'string', enum: \['visible', 'hidden'\] \}/.test(toolsSource), 'bsb_wait_for output schema lost matchedVisibility')
+  assert.ok(/visible: \{ type: 'boolean'/.test(toolsSource), 'bsb_wait_for does not document visible')
+  assert.ok(/visible: args\?\.visible === true/.test(toolsSource), 'bsb_wait_for does not forward visible')
+  assert.ok(/autoNewTab: \{ type: 'boolean' \}/.test(toolsSource), 'bsb_open output schema lost autoNewTab')
+  assert.ok(/scriptable: \{ type: 'boolean' \}/.test(toolsSource), 'bsb_tabs row schema lost scriptable')
+  assert.ok(/navigationError: \{ type: 'string' \}/.test(toolsSource), 'a tool output schema lost navigationError')
+  assert.ok(/function renderTabs\(/.test(toolsSource), 'bsb_tabs lost its readable list renderer')
+  assert.ok(/state: \$\{state\.readyState/.test(toolsSource), 'renderRead no longer shows the state line')
+  assert.ok(/hint: \$\{value\.hint\}/.test(toolsSource), 'renderRead no longer shows the hint')
+  assert.ok(/match visibility: \$\{value\.matchedVisibility\}/.test(toolsSource), 'bsb_wait_for render lost matchedVisibility')
+  assert.ok(/navigation failed/.test(toolsSource), 'bsb_tabs render no longer marks a failed navigation')
+  const navSkill = await readFile(new URL('../skill/browser-bridge/SKILL.md', import.meta.url), 'utf8')
+  for (const field of ['requestedUrl', 'documentUrl', 'httpStatus', 'navigationError', 'autoNewTab', 'scriptable', 'activated', 'matchedVisibility', 'matchedBox', 'reloaded:false']) {
+    assert.ok(navSkill.includes(field), 'the skill does not document ' + field)
+  }
+  assert.ok(/visible:true/.test(navSkill), 'the skill does not document the visible wait condition')
+  console.log('ok  navigation truth is pinned (requested/document URL, HTTP status, net error, reload, visibility)')
+
+  // Post-merge runtime fixes: a shadowed reload hint, a wait that could match a
+  // failed document, and clip-aware text for anti-scrape timestamps.
+  assert.ok(/let reloadHint/.test(workerSource) && !/let hint\n    if \(!reloaded\)/.test(workerSource),
+    'bsb_tabs reload shadows the tabId hint again')
+  assert.ok(/const documentFailed = state\?\.failedDocument/.test(workerSource)
+    && /const okNow = !documentFailed && state\?\.selectorOk/.test(workerSource),
+    'bsb_wait_for can report a failed document as matched')
+  assert.ok(/visibleClippedText/.test(workerSource) && /replaceClippedRuns/.test(workerSource),
+    'normalize lost clip-aware text extraction')
+  console.log('ok  post-merge guards pinned (reload hint, failed wait, clip-aware normalize)')
 
   // Replies must say what happens next, not just what happened. Three failures
   // in one session came from replies that were technically true: an armed
