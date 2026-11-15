@@ -19,29 +19,6 @@ Ten tools cover reading, input, waiting, screenshots, pixel sampling, network an
 console observation, and script evaluation. The host plugin listens on one local
 port and serves the extension zip and a small dashboard on the plugin page.
 
-## Screenshots
-
-The plugin page in DSH, showing connected browsers and the extension download:
-
-![Browser Bridge plugin page](images/plugin-page.png)
-
-### Popup states
-
-The lamp and the word beside it carry the connection state. A failed pairing
-turns the Pair button red until the field changes.
-
-The band at the bottom encodes the browser id. With no id yet, the strip is a
-single quiet rule instead of a pattern.
-
-| State | Preview |
-| --- | --- |
-| Never connected, before an identity exists (flat band) | <img src="images/popup-never-connected.png" width="320" alt="Popup never connected state with a flat band"> |
-| Checking, before the first status read | <img src="images/popup-checking.png" width="320" alt="Popup checking state"> |
-| Not connected | <img src="images/popup-not-connected.png" width="320" alt="Popup not connected state"> |
-| Reconnecting, amber lamp | <img src="images/popup-reconnecting.png" width="320" alt="Popup reconnecting state"> |
-| Connected, green lamp | <img src="images/popup-connected.png" width="320" alt="Popup connected state"> |
-| Pairing failed, red button | <img src="images/popup-error.png" width="320" alt="Popup pairing error state"> |
-
 ## Requirements
 
 - DeepSeek Harness with plugin rows. Both webserver route contracts used by DSH
@@ -81,6 +58,29 @@ Extension changes: replace the files in the folder you loaded and press reload o
 the card in `chrome://extensions`. Host changes: toggle the bundle or restart
 DSH, then check `/browser-bridge/api/build`, which reports the build that is
 actually running.
+
+## Screenshots
+
+The plugin page in DSH, showing connected browsers and the extension download:
+
+![Browser Bridge plugin page](images/plugin-page.png)
+
+### Popup states
+
+The lamp and the word beside it carry the connection state. A failed pairing
+turns the Pair button red until the field changes.
+
+The band at the bottom encodes the browser id. With no id yet, the strip is a
+single quiet rule instead of a pattern.
+
+| State | Preview |
+| --- | --- |
+| Never connected, before an identity exists (flat band) | <img src="images/popup-never-connected.png" width="320" alt="Popup never connected state with a flat band"> |
+| Checking, before the first status read | <img src="images/popup-checking.png" width="320" alt="Popup checking state"> |
+| Not connected | <img src="images/popup-not-connected.png" width="320" alt="Popup not connected state"> |
+| Reconnecting, amber lamp | <img src="images/popup-reconnecting.png" width="320" alt="Popup reconnecting state"> |
+| Connected, green lamp | <img src="images/popup-connected.png" width="320" alt="Popup connected state"> |
+| Pairing failed, red button | <img src="images/popup-error.png" width="320" alt="Popup pairing error state"> |
 
 ## Tools
 

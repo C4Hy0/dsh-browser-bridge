@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Browser Bridge",
+    "description": "Drive the Chromium browser you are already signed into: ten tools over the DevTools Protocol, paired through one extension."
+  }
+}

@@ -9,7 +9,8 @@
     "./bridge": "./bridge.js",
     "./tools": "./tools.js",
     "./icon": "./icon.svg",
-    "./client": "./client.js"
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "cordis.patch.yml",
@@ -27,7 +28,8 @@
     "extension/**",
     "scripts/**",
     "icon.svg",
-    "images/**"
+    "images/**",
+    "locale/*.json"
   ],
   "dsh": {
     "bundle": {
