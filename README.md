@@ -39,9 +39,11 @@ ten tools.
 
 ### 2. Install the extension
 
-1. Open the plugin page in the DSH web UI. The Browser extension card has a
-   download button. The host packs the zip from `extension/` when you click, so
-   there is no build step.
+1. In the DSH sidebar, open Plugins, then select Browser Bridge under Installed
+   plugins. The page has a card titled Browser extension, with the extension ID,
+   its version, and a Download extension (.zip) button. The host packs the zip
+   from `extension/` when you click, so there is no build step. The plugin page
+   screenshot under Screenshots shows the card.
 2. Unzip the download. The folder must contain `manifest.json` at its top level.
 3. Open `chrome://extensions` (or `edge://extensions`), turn on Developer mode,
    choose Load unpacked, and select that folder.
