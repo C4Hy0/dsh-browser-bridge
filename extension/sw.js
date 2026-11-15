@@ -3322,10 +3322,28 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     // that owns visible text. On a canvas game (or any page whose active element
     // is body) there is no document text to compare, so the probe stays off.
     const probe = prefix ? await evaluate(tabId, keyTextProbeExpr(prefix)).catch(() => null) : null
+    // A long run of per-character CDP key events is slow enough to hit the tool
+    // timeout and, on at least one live fixture, crash the renderer. When the
+    // focused element owns editable text and the run is long, insert the block
+    // in one real input event instead. Canvas/key-driven pages keep the keydown
+    // path; the reply says which path ran.
+    const editableActive = await evaluate(tabId, `(() => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = String(el.tagName || '').toLowerCase();
+      return tag === 'input' || tag === 'textarea' || el.isContentEditable === true || el.getAttribute('role') === 'textbox';
+    })()`).catch(() => false)
+    let bulk = false
+    if (chars.length > 200 && editableActive) {
+      try {
+        await send(tabId, 'Input.insertText', { text: chars.join('') })
+        bulk = true
+      } catch {}
+    }
     const gap = Math.min(Math.max(Number(keyDelayMs) || 40, 8), 500)
     let tabs = 0
     let enters = 0
-    for (const ch of chars) {
+    if (!bulk) for (const ch of chars) {
       // A tab or newline in the text is a navigation key, not a printable
       // character: spreadsheet-style editing needs real Tab/Enter keydowns and a
       // keyUp for each. Anything else in the C0/DEL range has no honest mapping,
@@ -3365,7 +3383,8 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     return {
       url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length,
       requestedKeys: requested.length, truncated, droppedKeys: requested.length - chars.length,
-      tabs, enters, modifiers: [], ...(verification ?? {}), ...inputSuccess(visibility, forced),
+      tabs, enters, mode: bulk ? 'insertText' : 'keys', keySemantics: bulk ? 'insertText' : 'keydown-keyup',
+      modifiers: [], ...(verification ?? {}), ...inputSuccess(visibility, forced),
     }
   }
   const specFor = (raw) => {

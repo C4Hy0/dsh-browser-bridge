@@ -25,7 +25,7 @@ import { packExtension, ZIP_NAME } from './scripts/pack-extension.mjs'
 // the mismatch looks like a bug in the extension. A unique query forces a fresh
 // module instance on every reload, which is what "toggle the bundle" promises.
 const toolModuleUrl = new URL('./tools.js', import.meta.url)
-const TOOLS_BUILD = '1.1.279'
+const TOOLS_BUILD = '1.1.280'
 toolModuleUrl.searchParams.set('reload', String(Date.now()))
 const { registerTools } = await import(toolModuleUrl.href)
 
@@ -35,7 +35,7 @@ export const inject = ['tools', 'attachments']
 
 const here = dirname(fileURLToPath(import.meta.url))
 /** Bumped by the release script; proves which host code is live. */
-const HOST_BUILD = '1.1.279'
+const HOST_BUILD = '1.1.280'
 const EXTENSION_ZIP = join(here, 'dist', 'browser-bridge-extension.zip')
 
 /**
