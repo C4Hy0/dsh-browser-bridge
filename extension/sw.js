@@ -375,18 +375,31 @@ async function uploadPage({ target, files, frame, x, y, forceActive: forceWanted
     const hit = resolveFrameArg(await frameList(tabId), frame)
     if (!hit) throw fail('FRAME_NOT_FOUND', `no child frame matches ${frame}`)
     if (!target) throw fail('BAD_ARGUMENT', 'upload with frame needs a target selector inside that frame, or x and y instead')
-    const owner = await send(tabId, 'DOM.getFrameOwner', { frameId: hit.frameId })
-    const described = await send(tabId, 'DOM.describeNode', { backendNodeId: owner?.backendNodeId })
-    const rootNodeId = described?.node?.contentDocument?.nodeId
+    // The frame's document is a node in the tab's DOM tree only when the frame
+    // runs in the same process. `getFrameOwner` + `describeNode` alone misses it
+    // for a same-origin picker iframe (the Google Picker is same-origin and was
+    // still reported unreachable), so walk the pierced tree instead: it carries
+    // every same-process iframe as a `contentDocument` child.
+    const root = await send(tabId, 'DOM.getDocument', { depth: -1, pierce: true })
+    const findFrameDocument = (node) => {
+      if (!node) return null
+      if (node.frameId === hit.frameId && node.contentDocument) return node.contentDocument
+      for (const child of node.children ?? []) {
+        const found = findFrameDocument(child)
+        if (found) return found
+      }
+      return node.contentDocument ? findFrameDocument(node.contentDocument) : null
+    }
+    const frameDocument = findFrameDocument(root?.root)
+    const rootNodeId = frameDocument?.nodeId
     if (!rootNodeId) {
-      // The ticket that asked for the chooser route hit this exact wall: the
-      // frame's document is not part of the tab's DOM tree, so no selector can
-      // resolve inside it. The chooser route never reads that document.
+      // A cross-site out-of-process frame is not part of this tab's DOM tree, so
+      // no selector can resolve inside it. Say so instead of guessing.
       throw fail(
-        'FRAME_NOT_FOUND',
-        `the frame document is not reachable from the tab (cross-origin or out-of-process): ${hit.url || hit.frameId}. `
-        + 'Upload through the file chooser instead: call upload again without frame, with x,y over the control that opens the chooser, '
-        + 'or with a top-document target (a button, label, or the iframe element) that opens it.',
+        'FRAME_NOT_READABLE',
+        `the frame document is not part of the tab's DOM tree (a cross-site out-of-process frame): ${hit.url || hit.frameId}. `
+        + 'Upload through a top-document target (a button, label, or the iframe element) or a top-document file input, '
+        + 'or press the control that opens the chooser with x,y. A same-origin frame is reachable and should not hit this error.',
       )
     }
     const selector = resolveTarget(target)

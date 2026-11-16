@@ -1417,6 +1417,13 @@ try {
     assert.ok(/Input\.insertText/.test(workerSource), 'paste lost the Input.insertText fallback')
     assert.ok(/mode: 'clipboard'/.test(workerSource) && /mode: 'insertText'/.test(workerSource),
       'paste does not report which mode it actually used')
+    // A same-origin frame can still be absent from getFrameOwner's describeNode
+    // (the Google Picker was), so the upload path must walk the pierced tree.
+    assert.ok(
+      /depth: -1, pierce: true/.test(workerSource) && /findFrameDocument/.test(workerSource),
+      'upload no longer finds a same-origin frame document through the pierced DOM tree',
+    )
+    assert.ok(/FRAME_NOT_READABLE/.test(workerSource), 'upload no longer names an out-of-process frame')
     assert.ok(/truncated/.test(workerSource) && /PASTE_MAX_CHARS/.test(workerSource), 'paste no longer reports truncation')
     assert.ok(!/ClipboardEvent/.test(workerSource), 'paste dispatches a synthetic ClipboardEvent instead of real input')
     assert.ok(/clipboardWrite/.test(JSON.stringify(manifest.permissions)), 'the extension cannot write the clipboard')

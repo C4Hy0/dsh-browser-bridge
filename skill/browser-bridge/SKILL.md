@@ -377,7 +377,7 @@ whose app never booted. The replies now carry that difference.
 | Long `key text` run lost its tail | read `truncated`/`droppedKeys`: the cap is 5000 characters per call. Send the rest in a second call |
 | `keys:[...]` shortcut did not fire | read `modifiers` in the reply; a chord that was not delivered reports `modifiers:0`. Use `keys` with modifier names or `key` plus `modifiers:["Control"]` |
 | Paste inserted nothing | click the field or cell first (or pass `target`); read `mode` and the note: `insertText` is not a native paste; front the tab so the browser paste command is enabled |
-| `upload` cannot reach the frame | the cross-origin chooser route is disabled (it crashed the renderer); set files on a top-document `<input type="file">` with `target`, or on a reachable frame input. Do not use `x,y` |
+| `upload` cannot reach the frame | a same-origin picker iframe (Drive/Sheets import) works with `frame` + `target:"input[type=file]"`; a cross-site out-of-process frame fails with `FRAME_NOT_READABLE`. Set files on a top-document input, or use the frame route. The native chooser route is disabled (it crashed the renderer) |
 | Canvas has no text | `bsb_eval`, `bsb_pixels`, `bsb_capture`; map canvas coordinates |
 | Feed read returns few or 0 items | read `reason`, `matched` and `unkeyed`; a hidden tab needs `forceActive:true`, placeholders need a better selector, and `scroll:true` is what collects beyond one viewport |
 | Result links are `/goto?url=`, `/url?q=` or `t.co` | `bsb_read rows resolve:true`; `resolvableBy:"navigation"` means open the link to learn its target |
