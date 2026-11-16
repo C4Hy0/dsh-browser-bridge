@@ -248,6 +248,25 @@ expect('withdrawn closure without the reporter fails', (root) => {
   }))
 }, { code: 1, includes: ['withdrawn closure requires result: withdrawn'] })
 
+// A superseded confirmation kept below the current one is history. It must not
+// overwrite the current result, or a solved ticket reads still-broken.
+expect('superseded confirmation below the current one is ignored', (root) => {
+  const text = ticket({
+    id: 'BSB-20261116-0916-superseded',
+    status: 'closed',
+    extra: { owner: 'lead', fix_build: FIX_BUILD, resolution: 'fixed', confirmed_via: 'self' },
+    confirmation: solved,
+  })
+  const old = ticket({
+    id: 'BSB-20261116-0916-superseded',
+    status: 'closed',
+    extra: { owner: 'lead', fix_build: FIX_BUILD, resolution: 'fixed', confirmed_via: 'self' },
+    confirmation: { ...solved, result: 'still-broken', build_tested: 'host 1.1.280 / extension 1.0.270' },
+  })
+  const superseded = old.slice(old.indexOf('## Sender confirmation')).replace('## Sender confirmation', '## Sender confirmation (superseded, 1.1.280)')
+  writeTicket(root, 'closed', 'BSB-20261116-0916-superseded.md', `${text}\n${superseded}`)
+}, { code: 0, includes: ['no invalid closures'] })
+
 // Timestamps are how a reader orders a ticket against a build.
 expect('non-ISO timestamp fails', (root) => {
   writeTicket(root, 'inbox', 'BSB-20261116-0914-baddate.md', ticket({
