@@ -147,6 +147,21 @@ try {
   assert.equal(await pollB, 204, 'B must not receive A command')
   console.log('ok  result settles the call; B never saw it')
 
+  // 7b. A command whose caller stops waiting must not crash the host. Node
+  // exits on an unhandled rejection, so a slow browser could take DSH down with
+  // it. This test fires the send without awaiting it: if the rejection leaks,
+  // the process dies before the assertion.
+  {
+    const pollT = poll('browser-timeout', 'Chrome on Windows', 3000)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const orphan = bridge.send('upload', { target: '#x', files: ['/tmp/x.csv'] }, { browser: 'browser-timeout', timeoutMs: 150 })
+    const delivered = await pollT.then((response) => response.json())
+    assert.equal(delivered.method, 'upload')
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await orphan.catch(() => {})
+    console.log('ok  an ignored timeout does not crash the host')
+  }
+
   // 8. An unknown browser is a coded error, not a silent redirect.
   await assert.rejects(
     () => bridge.send('read', {}, { browser: 'nope', timeoutMs: 1000 }),
@@ -1331,6 +1346,15 @@ try {
     assert.ok(/frameContext\(tabId, frame\)/.test(workerSource) && /badInput/.test(workerSource), 'a framed key run is not probed in its frame, or badInput is not reported')
     assert.ok(/f\.name && f\.name === want/.test(workerSource), 'a srcdoc frame can no longer be resolved by name')
     assert.ok(/FILE_NOT_ON_BROWSER/.test(bridgeSource), 'a host path is still accepted for a remote browser')
+    // A throw after the command promise is created orphans it; its timeout then
+    // rejects with no handler and Node exits the whole host.
+    {
+      const sendBody = bridgeSource.slice(bridgeSource.indexOf('send(method'), bridgeSource.indexOf('async #waitLive'))
+      const fileAt = sendBody.indexOf('FILE_NOT_ON_BROWSER')
+      const resultAt = sendBody.indexOf('const result = new Promise')
+      assert.ok(fileAt > 0 && resultAt > 0 && fileAt < resultAt, 'a validation throw can orphan the command promise and crash the host')
+      assert.ok(/result\.catch\(\(\) => \{\}\)/.test(sendBody), 'the command promise is not marked handled')
+    }
     console.log('ok  fleet-batch guards pinned (covered clicks, tracking fallback, pixels, feed skip, download, PDF, wait hint, frame key, remote paths)')
   }
 

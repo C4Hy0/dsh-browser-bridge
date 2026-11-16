@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.1.287'
+export const VERSION = '1.1.288'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 /**
@@ -305,16 +305,16 @@ export class Bridge {
         )
       }
       if (entry.queue.length >= MAX_QUEUE) throw new BridgeError('BUSY', 'the browser is behind on commands; retry')
-      const commandId = String(++this.#seq)
-      const result = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          this.#pending.delete(commandId)
-          reject(new BridgeError('TIMEOUT', `the browser did not answer "${method}" within ${Math.round(timeoutMs / 1000)}s`))
-        }, timeoutMs)
-        this.#pending.set(commandId, { resolve, reject, timer, method, browser: id })
-      })
-      entry.lastCommandAt = Date.now()
+      // Validate BEFORE creating the command promise. A throw after the promise
+      // exists orphans it: its timeout timer then rejects with no handler, and
+      // Node exits the whole host on an unhandled rejection. A remote-browser
+      // upload hit exactly that and took DSH down.
       const enriched = { ...params }
+      // Tab identity lives on the host too: extension storage can be wiped by a
+      // reload between two tool calls, which would orphan the page.
+      if (enriched.tabId === undefined && entry.lastTabId !== undefined && method !== 'open' && method !== 'tabs') {
+        enriched.tabId = entry.lastTabId
+      }
       // A file path from this host may not exist on the browser's machine.
       if ((method === 'upload' || method === 'drop') && Array.isArray(enriched.files) && enriched.files.length > 0) {
         const loopback = !entry.remoteAddress || /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(entry.remoteAddress)
@@ -331,17 +331,29 @@ export class Bridge {
         }
         enriched.files = enriched.files.map((file) => translateFilePath(file, entry.userAgent))
       }
-      // Tab identity lives on the host too: extension storage can be wiped by a
-      // reload between two tool calls, which would orphan the page.
-      if (enriched.tabId === undefined && entry.lastTabId !== undefined && method !== 'open' && method !== 'tabs') {
-        enriched.tabId = entry.lastTabId
-      }
+      const commandId = String(++this.#seq)
+      const result = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.#pending.delete(commandId)
+          reject(new BridgeError('TIMEOUT', `the browser did not answer "${method}" within ${Math.round(timeoutMs / 1000)}s`))
+        }, timeoutMs)
+        this.#pending.set(commandId, { resolve, reject, timer, method, browser: id })
+      })
+      // Belt and braces: even if a later line throws, the promise is handled.
+      result.catch(() => {})
+      entry.lastCommandAt = Date.now()
       entry.queue.push({ id: commandId, method, params: enriched })
       this.#deliver(entry)
       return result
     }
     const key = browser ?? 'auto'
     const chain = (this.#chains.get(key) ?? Promise.resolve()).then(run, run)
+    // A caller that stops waiting (a cancelled tool call, a fire-and-forget
+    // path) must not turn a browser timeout into an unhandled rejection. Node
+    // exits the whole process on those, so a slow browser could take the host
+    // down. Mark the promise handled here; callers that await it still get the
+    // rejection.
+    chain.catch(() => {})
     this.#chains.set(key, chain.then(() => {}, () => {}))
     return chain
   }
