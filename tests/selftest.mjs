@@ -7,7 +7,8 @@
  */
 
 import assert from 'node:assert/strict'
-import { networkInterfaces } from 'node:os'
+import { homedir, networkInterfaces } from 'node:os'
+import { join as joinPath } from 'node:path'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 
@@ -587,6 +588,33 @@ try {
   // The friction ledger belongs to the maintainer workspace, not the public
   // plugin. Check it when present so both layouts pass.
   if (existsSync(new URL('../friction/FRICTION.md', import.meta.url))) console.log('ok  friction ledger present')
+
+  // The reporter protocol has one source of truth: COPY_AGENTS.md. The
+  // profile-local skill only triggers the habit and points at it, so the two
+  // cannot drift into two different protocols. Checked only in the maintainer
+  // workspace, because friction/ is not exported.
+  if (existsSync(new URL('../friction/COPY_AGENTS.md', import.meta.url))) {
+    const copyAgents = await readFile(new URL('../friction/COPY_AGENTS.md', import.meta.url), 'utf8')
+    for (const status of ['open', 'triaged', 'fixing', 'needs-info', 'duplicate', 'awaiting-confirmation', 'closed']) {
+      assert.ok(copyAgents.includes('`' + status + '`'), `COPY_AGENTS.md no longer documents the ${status} status`)
+    }
+    for (const field of ['result', 'confirmed_by', 'confirmed_at', 'build_tested']) {
+      assert.ok(copyAgents.includes(field + ':'), `COPY_AGENTS.md no longer shows the ${field} confirmation field`)
+    }
+    assert.ok(/only you|Only you/u.test(copyAgents), 'COPY_AGENTS.md lost the reporter-only closure rule')
+    assert.ok(/Verification requested/u.test(copyAgents), 'COPY_AGENTS.md lost the verification-request rule')
+    assert.ok(!/\u2014/u.test(copyAgents), 'COPY_AGENTS.md contains an em dash')
+    // Built from the home directory, not a literal path: the exporter rejects
+    // absolute home paths in exported files.
+    const skillPath = joinPath(homedir(), '.agents', 'skills', 'bsb-friction', 'SKILL.md')
+    if (existsSync(skillPath)) {
+      const skill = await readFile(skillPath, 'utf8')
+      assert.ok(/friction\/COPY_AGENTS\.md/u.test(skill), 'the reporter skill no longer points at COPY_AGENTS.md')
+      assert.ok(/only you|Only you/u.test(skill), 'the reporter skill lost the reporter-only closure rule')
+      assert.ok(!/## Your ticket's life/u.test(skill), 'the reporter skill duplicates the lifecycle table instead of pointing at COPY_AGENTS.md')
+    }
+    console.log('ok  reporter protocol has one source of truth (COPY_AGENTS.md, skill points at it)')
+  }
 
   // Every @font-face URL must resolve to a file that actually ships, and every
   // family the CSS references must be declared. A stale font reference is silent:

@@ -60,6 +60,6 @@
     "ai-agents"
   ],
   "scripts": {
-    "test": "node tests/selftest.mjs && node tests/compat-webserver.mjs"
+    "test": "node tests/selftest.mjs && node tests/compat-webserver.mjs && node tests/friction-contract.mjs"
   }
 }
