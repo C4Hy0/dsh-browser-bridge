@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.1.284'
+export const VERSION = '1.1.287'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 /**
@@ -317,6 +317,18 @@ export class Bridge {
       const enriched = { ...params }
       // A file path from this host may not exist on the browser's machine.
       if ((method === 'upload' || method === 'drop') && Array.isArray(enriched.files) && enriched.files.length > 0) {
+        const loopback = !entry.remoteAddress || /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(entry.remoteAddress)
+        const hostPath = enriched.files.find((file) => typeof file === 'string' && file.trim().startsWith('/'))
+        if (!loopback && hostPath) {
+          // A remote browser cannot read this host's file system. Chrome accepts
+          // the path and attaches a zero-byte file, so the failure would look like
+          // a successful upload with unreadable content.
+          throw new BridgeError(
+            'FILE_NOT_ON_BROWSER',
+            `browser ${entry.label || id} is remote (${entry.remoteAddress}), so the host path ${JSON.stringify(hostPath)} does not exist on its machine. `
+            + 'Pass a path that exists on the browser (for example C:\\... on a Windows browser), or serve the file over http and download it there.',
+          )
+        }
         enriched.files = enriched.files.map((file) => translateFilePath(file, entry.userAgent))
       }
       // Tab identity lives on the host too: extension storage can be wiped by a
@@ -417,15 +429,16 @@ export class Bridge {
     try { json(waiter.res, 200, command) } catch {}
   }
 
-  #touch(id, label, userAgent) {
+  #touch(id, label, userAgent, remoteAddress) {
     let entry = this.#browsers.get(id)
     if (!entry) {
-      entry = { id, label: '', lastSeenAt: 0, lastCommandAt: 0, waiter: undefined, queue: [], userAgent: '' }
+      entry = { id, label: '', lastSeenAt: 0, lastCommandAt: 0, waiter: undefined, queue: [], userAgent: '', remoteAddress: '' }
       this.#browsers.set(id, entry)
     }
     entry.lastSeenAt = Date.now()
     if (typeof label === 'string' && label.trim().length > 0) entry.label = label.trim().slice(0, 64)
     if (typeof userAgent === 'string' && userAgent.length > 0) entry.userAgent = userAgent.slice(0, 200)
+    if (typeof remoteAddress === 'string' && remoteAddress.length > 0) entry.remoteAddress = remoteAddress
     return entry
   }
 
@@ -517,7 +530,7 @@ export class Bridge {
         return json(res, 410, { ok: false, blocked: true })
       }
       this.#prune()
-      const entry = this.#touch(id, url.searchParams.get('label') ?? '', req.headers['user-agent'] ?? '')
+      const entry = this.#touch(id, url.searchParams.get('label') ?? '', req.headers['user-agent'] ?? '', req.socket.remoteAddress ?? '')
       entry.extensionVersion = url.searchParams.get('v') ?? entry.extensionVersion ?? ''
       if (entry.waiter) return empty(res, 204) // one poll per browser
       const command = entry.queue.shift()

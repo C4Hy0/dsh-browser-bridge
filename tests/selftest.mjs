@@ -1316,6 +1316,24 @@ try {
     console.log('ok  an explicit tabId does not move the tracked tab')
   }
 
+  // Guards from the 2026-11-17 fleet batch. Each one is a reply that looked
+  // successful while the page did something else.
+  {
+    assert.ok(/hit = Boolean\(at\) && \(at === el/.test(workerSource), 'boxOf no longer reports whether the point hits the element')
+    assert.ok(/TARGET_COVERED/.test(workerSource) && /if \(box\.hit === false\)/.test(workerSource), 'a covered click no longer fails loudly')
+    assert.ok(/applied: false, dispatched: true/.test(workerSource), 'a verified no-op still reports applied:true')
+    assert.ok(/nextTracked/.test(workerSource) && /candidates\.find\(\(tab\) => tab\.active\)/.test(workerSource), 'closing the tracked tab no longer falls back to another tab')
+    assert.ok(/inViewport: false/.test(workerSource) && /painted: false/.test(workerSource), 'pixels still returns a zero grid for an unpainted element')
+    assert.ok(/skippedHidden/.test(workerSource) && /if \(!rendered\) \{ skippedHidden \+= 1; continue \}/.test(workerSource), 'feed still counts stale zero-size rows as items')
+    assert.ok(/entry\.download = true/.test(workerSource) && /ERR_ABORTED/.test(workerSource), 'a download is still recorded as a failed request')
+    assert.ok(/contentType: document\.contentType/.test(workerSource) && /rendered by a browser viewer/.test(workerSource), 'a PDF is still called an empty shell')
+    assert.ok(/visible === true/.test(workerSource) && /is present but hidden/.test(workerSource), 'the wait hint still recommends visible:true to a caller who passed it')
+    assert.ok(/frameContext\(tabId, frame\)/.test(workerSource) && /badInput/.test(workerSource), 'a framed key run is not probed in its frame, or badInput is not reported')
+    assert.ok(/f\.name && f\.name === want/.test(workerSource), 'a srcdoc frame can no longer be resolved by name')
+    assert.ok(/FILE_NOT_ON_BROWSER/.test(bridgeSource), 'a host path is still accepted for a remote browser')
+    console.log('ok  fleet-batch guards pinned (covered clicks, tracking fallback, pixels, feed skip, download, PDF, wait hint, frame key, remote paths)')
+  }
+
   // Guards from the CaptchaWare run. Each of these was a silent failure or a
   // missing primitive that cost a workaround, so pin the contract: wheel input,
   // key-driven text, cross-origin frame reads, non-editable type targets,

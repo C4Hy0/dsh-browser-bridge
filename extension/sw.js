@@ -91,6 +91,15 @@ function netOnResponse(tabId, params) {
   entry.status = params?.response?.status ?? null
   entry.mime = String(params?.response?.mimeType || '')
   entry.responseHeaders = netHeaders(params?.response?.headers)
+  const disposition = (params?.response?.headers || {})['content-disposition']
+    || (params?.response?.headers || {})['Content-Disposition'] || ''
+  // A download is a normal outcome. Chrome reports the navigation as aborted
+  // because the body never became a document, which reads as a failure in the
+  // network log and in bsb_open.
+  if (/attachment/i.test(String(disposition))) entry.download = true
+  if (/^(application\/octet-stream|application\/pdf|application\/zip|binary\/octet-stream)$/i.test(entry.mime) && String(params?.type || '') === 'Document') {
+    entry.download = true
+  }
 }
 
 async function netOnFinished(tabId, params) {
@@ -142,6 +151,24 @@ function consoleArg(arg) {
   return String(arg.type || 'unknown')
 }
 
+// A click on a target="_blank" link opens a tab the caller never hears about.
+// Remember which tab opened which, so the click reply can name it.
+const createdTabs = new Map()
+try {
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (typeof tab?.openerTabId !== 'number' || typeof tab.id !== 'number') return
+    createdTabs.set(tab.openerTabId, { id: tab.id, at: Date.now(), url: tab.pendingUrl || tab.url || '' })
+    while (createdTabs.size > 50) createdTabs.delete(createdTabs.keys().next().value)
+  })
+} catch {}
+
+/** The tab a click opened, if it opened one after `since`. */
+function recentCreatedTab(tabId, since) {
+  const hit = createdTabs.get(tabId)
+  if (!hit || hit.at < since) return null
+  return hit
+}
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source?.tabId
   if (tabId != null) {
@@ -152,7 +179,18 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (method === 'Network.loadingFailed') {
       const capture = netCapture(tabId)
       const entry = capture?.entries.get(params?.requestId)
-      if (entry) entry.error = String(params?.errorText || 'loading failed')
+      if (entry) {
+        const error = String(params?.errorText || 'loading failed')
+        // ERR_ABORTED on a 2xx response is how Chrome ends a navigation that
+        // became a download. Recording it as an error makes a success look like
+        // a failure; mark the download and keep the status.
+        if (/ERR_ABORTED/i.test(error) && Number(entry.status) >= 200 && Number(entry.status) < 400) {
+          entry.download = true
+          entry.note = 'the response became a download (ERR_ABORTED is Chrome ending the navigation, not a failure)'
+        } else {
+          entry.error = error
+        }
+      }
       return
     }
     if (method === 'Runtime.consoleAPICalled') {
@@ -1048,6 +1086,7 @@ async function pageState(tabId) {
     return {
       url: location.href,
       title: document.title,
+      contentType: document.contentType || '',
       readyState: document.readyState,
       // On a Chrome error page the status printed on the page is the response
       // status that failed; the navigation timing entry describes the error
@@ -1143,6 +1182,15 @@ function documentHint(state, { requestedUrl, navigationError } = {}) {
     const suffix = error && status > 0 ? ' (HTTP ' + status + ')' : ''
     const asked = requestedUrl && requestedUrl !== documentUrl ? ' for ' + requestedUrl : ''
     return 'navigation failed' + asked + ': ' + code + suffix + '. The document is a Chrome error page, not the requested page; call bsb_open with the URL again to retry.'
+  }
+  const contentType = String(state.contentType ?? '')
+  if (contentType && !/^text\/html/i.test(contentType) && !/^application\/xhtml/i.test(contentType)) {
+    // A PDF or image document renders in a browser viewer, not the DOM. Judging
+    // it by body text and element count calls a rendered document an empty shell.
+    return 'the document is ' + contentType + '; its content is rendered by a browser viewer, not the page DOM, so body text and element counts do not describe it. Use bsb_capture to read it.'
+  }
+  if (/ERR_ABORTED/i.test(String(navigationError ?? ''))) {
+    return 'the navigation was aborted (net::ERR_ABORTED). If the URL was a download, the file went to the browser downloads list, which bsb does not expose; the tab still shows the previous page.'
   }
   if (error) {
     // The navigation named a failure but committed no error document (for
@@ -1425,7 +1473,19 @@ function boxOf(selector) {
   // If it still is not visible, say so instead of pressing empty space: a click
   // outside the viewport is a silent no-op, which reads as "the page ignored me".
   const offscreen = rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth
-  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, offscreen }
+  const x = rect.left + rect.width / 2
+  const y = rect.top + rect.height / 2
+  // A point can be inside the viewport and still not be the element: a sticky
+  // header, an overlay, or a page that scrolled back after the measurement puts
+  // something else there. Pressing it anyway is a silent no-op reported as
+  // applied, so say whether the point really hits.
+  let hit = null
+  try {
+    const at = document.elementFromPoint(x, y)
+    hit = Boolean(at) && (at === el || el.contains(at) || at.contains(el))
+    if (!hit && at) hit = { tag: at.tagName, id: at.id || undefined, cls: String(at.className || '').slice(0, 40) }
+  } catch {}
+  return { x, y, offscreen, hit }
 }
 
 const pngSize = (base64) => {
@@ -1716,7 +1776,9 @@ async function readPage({ maxChars, maxElements, probe, frame, normalize, tabId:
       if (probe) {
         throw fail(
           'FRAME_NOT_READABLE',
-          `frame ${JSON.stringify(String(frame))} (${probe.url || 'no url'}) is cross-origin or out-of-process, so the tab target cannot read it: open ${probe.url} at its own URL, or read the frame element with bsb_eval. It was not silently replaced by the parent page.`,
+          `frame ${JSON.stringify(String(frame))}${probe.url ? ' (' + probe.url + ')' : ' (no url, a srcdoc or scripted frame)'} is cross-origin or out-of-process, so the tab target cannot read it: `
+          + (probe.url ? `open ${probe.url} at its own URL, ` : '')
+          + 'or read the frame element with bsb_eval. It was not silently replaced by the parent page.',
         )
       }
       const visible = await frameList(tabId)
@@ -1848,7 +1910,14 @@ async function findTextPoint(tabId, text) {
       r = best.el.getBoundingClientRect();
       scrolled = true;
     }
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: best.text, scrolled, matches: out.length };
+    const x = r.x + r.width / 2;
+    const y = r.y + r.height / 2;
+    let hit = null;
+    try {
+      const at = document.elementFromPoint(x, y);
+      hit = Boolean(at) && (at === best.el || best.el.contains(at) || at.contains(best.el));
+    } catch {}
+    return { x, y, text: best.text, scrolled, matches: out.length, hit };
   })()`)
   if (!found) throw textNotClickable(await evaluate(tabId, textCandidatesExpr(wanted)).catch(() => null), wanted)
   return found
@@ -2102,7 +2171,12 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
       const changed = fingerprintChanged(beforePrint, afterPrint)
       if (changed !== null) {
         merged = { ...reply, pageChanged: changed }
-        if (!changed) merged.hint = CLICK_UNCHANGED_HINT
+        if (!changed) {
+          // "applied" means the press had the effect the caller asked for. A
+          // verified no-op is a dispatched press with no effect, and the two
+          // fields must not contradict each other.
+          merged = { ...merged, applied: false, dispatched: true, hint: CLICK_UNCHANGED_HINT }
+        }
       }
     }
     if (forced) await clearForced(tabId, forced)
@@ -2190,12 +2264,25 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
   // needs no knowledge of the page's markup.
   if (text) {
     const hit = await findTextPoint(tabId, text)
+    const openedSince = Date.now()
+    if (hit.hit === false) {
+      throw fail(
+        'TARGET_COVERED',
+        `the text ${JSON.stringify(hit.text)} is at (${Math.round(hit.x)},${Math.round(hit.y)}) but another element covers that point, so the press was not dispatched. `
+        + 'Scroll it clear of the overlay or click the cover explicitly.',
+      )
+    }
     if (hit.scrolled) await delay(180)
     const beforePrint = await snapshotBefore()
     const taps = await pressAt(tabId, { x: hit.x, y: hit.y }, count, button, holdMs)
     await delay(400)
     const meta = await pageMeta(tabId)
-    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches, clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
+    const opened = recentCreatedTab(tabId, openedSince)
+    return finish({
+      url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches,
+      clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId),
+      ...(opened ? { newTabId: opened.id, newTabUrl: opened.url || undefined, hint: 'the click opened a new tab; it is not tracked. Use bsb_tabs use with newTabId to adopt it.' } : {}),
+    }, beforePrint)
   }
   const selector = resolveTarget(target)
   // Press every match in one call: dense grids of checkboxes otherwise cost one
@@ -2214,8 +2301,23 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
     const allMeta = await pageMeta(tabId)
     return finish({ url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
   }
-  const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
+  let box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
+  if (box.hit === false) {
+    // The page moved between the measurement and the press (a sticky header, an
+    // auto-scroll, a re-render). Re-measure once, then refuse.
+    await delay(150)
+    box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
+  }
+  if (box.hit === false) {
+    const at = box.hit && typeof box.hit === 'object' ? box.hit : null
+    throw fail(
+      'TARGET_COVERED',
+      `${selector} is at (${Math.round(box.x)},${Math.round(box.y)}) but the element at that point is `
+      + `${at ? `${at.tag}${at.id ? '#' + at.id : ''}` : 'something else'}. The press was not dispatched, because it would land on the cover. `
+      + 'Scroll the element clear of the overlay, close the menu or cookie banner, or click the cover explicitly.',
+    )
+  }
   if (box.offscreen) {
     throw fail(
       'TARGET_OFFSCREEN',
@@ -2229,16 +2331,19 @@ async function clickPage({ target, text, x, y, frame, count, targets, all, butto
   const matched = await evaluate(tabId, `(() => { try { return document.querySelectorAll(${JSON.stringify(selector)}).length } catch { return 1 } })()`)
   const beforeClick = await pageMeta(tabId)
   const beforePrint = await snapshotBefore()
+  const openedSince = Date.now()
   const taps = await pressAt(tabId, { x: box.x, y: box.y }, count, button)
   await delay(400)
   let meta = await pageMeta(tabId)
   const followed = await followMapArea(tabId, box.x, box.y, beforeClick?.url, meta?.url)
   if (followed) meta = (await pageMeta(tabId)) ?? meta
+  const opened = recentCreatedTab(tabId, openedSince)
   const described = await evaluate(tabId, `(() => { try { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; return { tag: el.tagName.toLowerCase(), text: (el.innerText || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 40), id: el.id || undefined, name: el.getAttribute?.('name') || undefined }; } catch { return null } })()`)
   return finish({
     url: meta?.url ?? '', title: meta?.title ?? '', matchedCount: matched, element: described ?? undefined,
     clickedAt: { x: box.x, y: box.y }, clicks: taps, windowRestored: layout.restored,
     dialog: recentDialog(tabId), followed,
+    ...(opened ? { newTabId: opened.id, newTabUrl: opened.url || undefined, hint: 'the click opened a new tab; it is not tracked. Use bsb_tabs use with newTabId to adopt it.' } : {}),
   }, beforePrint)
 }
 
@@ -3281,6 +3386,8 @@ const keyTextProbeExpr = (prefix) => `(() => {
     textLen: measured.length,
     ownLen: own.length,
     landed: wanted.length > 0 && (squash(measured).indexOf(wanted) !== -1 || squash(own).indexOf(wanted) !== -1),
+    badInput: Boolean(el && el.validity && el.validity.badInput),
+    value: String(own || '').slice(0, 80),
     excerpt: squash(measured).slice(0, 120),
   };
 })()`
@@ -3317,6 +3424,13 @@ function keyTextVerification(before, after, prefix, sent) {
       + 'is shorter than before: the editor may have replaced a selection, eaten existing text, or lost its caret. Re-read the page with bsb_read to see what remains.',
     )
   }
+  if (after.badInput) {
+    throw fail(
+      'TEXT_NOT_APPLIED',
+      `key text left the control in an invalid state: ${sent} key(s) were sent and the field reports validity.badInput with value ${JSON.stringify(after.value ?? '')}. `
+      + `${counts}. A date, time or number input needs its own format (for example 2024-02-29 for a date); the keystrokes did not produce a valid value.`,
+    )
+  }
   if (after.landed) return { ...fields, textVerified: true }
   throw fail(
     'TEXT_NOT_APPLIED',
@@ -3326,8 +3440,19 @@ function keyTextVerification(before, after, prefix, sent) {
   )
 }
 
-async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, target, modifiers, forceActive: forceWanted, measure, settle, tabId: hint }) {
+async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, target, modifiers, frame, forceActive: forceWanted, measure, settle, tabId: hint }) {
   const tabId = await requirePage(hint)
+  // A framed key run lands in the frame's document, so the probe must read that
+  // document; the top page's activeElement is body and looks unmeasurable.
+  let frameContext
+  if (frame !== undefined && frame !== null && String(frame).trim() !== '') {
+    try {
+      frameContext = (await frameContext(tabId, frame)).contextId
+    } catch {}
+  }
+  const probeIn = async (expression) => (frameContext === undefined
+    ? evaluate(tabId, expression)
+    : evaluateInContext(tabId, frameContext, expression))
   // forceActive:true is the escape hatch for a page whose frame clock has
   // stopped (a sleeping display leaves the tab "hidden" and rAF paused, so
   // input would be held). It is never installed on attach and it never happens
@@ -3340,7 +3465,7 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       && !key && !(Array.isArray(keys) && keys.length) && !(Array.isArray(steps) && steps.length)) {
     if (target) {
       const selector = resolveTarget(target)
-      const focused = await evaluate(tabId, `(() => { const el = ${deepFindExpr(selector)}; if (!el) return false; el.focus(); return true })()`)
+      const focused = await probeIn(`(() => { const el = ${deepFindExpr(selector)}; if (!el) return false; el.focus(); return true })()`)
       if (!focused) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
     }
     // A long run used to be cut at 1000 keys with no marker, so a 1200-character
@@ -3354,7 +3479,7 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     // Verification only means something when the focused element is an editor
     // that owns visible text. On a canvas game (or any page whose active element
     // is body) there is no document text to compare, so the probe stays off.
-    const probe = prefix ? await evaluate(tabId, keyTextProbeExpr(prefix)).catch(() => null) : null
+    const probe = prefix ? await probeIn(keyTextProbeExpr(prefix)).catch(() => null) : null
     // A long run of per-character CDP key events is slow enough to hit the tool
     // timeout and, on at least one live fixture, crash the renderer. When the
     // focused element owns editable text and the run is long, insert the block
@@ -3410,7 +3535,7 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
     // it in the same task would compare against the pre-run state.
     if (probe?.source === 'document-mirror') await delay(250)
     const after = probe?.applies === true
-      ? await evaluate(tabId, keyTextProbeExpr(prefix)).catch(() => null)
+      ? await probeIn(keyTextProbeExpr(prefix)).catch(() => null)
       : null
     if (forced) await clearForced(tabId, forced)
     const verification = probe?.applies === true
@@ -4175,7 +4300,9 @@ async function waitForCore({ selector, text, url, network, expression, gone, ena
             { requestedUrl: askedUrl || cached?.requestedUrl, navigationError: errorNow },
           )
         : state?.matchedVisibility === 'hidden'
-          ? 'selector ' + JSON.stringify(String(selector)) + ' matched a hidden node (zero-size box or aria-hidden ancestor). Pass visible:true to require a visible match, or wait for the content to render.'
+          ? (visible === true
+            ? 'selector ' + JSON.stringify(String(selector)) + ' is present but hidden (zero-size box or aria-hidden ancestor). It may be revealed by hover or click, or by a state change; trigger that, then wait again.'
+            : 'selector ' + JSON.stringify(String(selector)) + ' matched a hidden node (zero-size box or aria-hidden ancestor). Pass visible:true to require a visible match, or wait for the content to render.')
           : undefined
       const out = {
         matched: false,
@@ -5430,6 +5557,8 @@ function resolveFrameArg(frames, arg) {
   return (
     frames.find((f) => f.frameId === want) ||
     frames.find((f) => f.parentId !== null && f.frameId.startsWith(want)) ||
+    // A srcdoc frame has no URL at all, so its name is the only stable handle.
+    frames.find((f) => f.parentId !== null && f.name && f.name === want) ||
     frames.find((f) => f.parentId !== null && f.url && f.url.includes(want)) ||
     null
   )
@@ -6155,6 +6284,30 @@ async function pixelsPage({ selector, grid, scale, points: wanted, radius, tabId
   })()`)
   if (!box || box.width < 2 || box.height < 2) throw fail('NO_MATCH', `no visible element matches ${sel}`)
   const view = await evaluate(tabId, '({ w: window.innerWidth, h: window.innerHeight })').catch(() => ({ w: 0, h: 0 }))
+  const inViewport = (b) => Boolean(b) && b.width > 0 && b.height > 0
+    && b.x + b.width > 0 && b.y + b.height > 0 && b.x < (view?.w ?? 0) && b.y < (view?.h ?? 0)
+  if (!inViewport(box)) {
+    // A screenshot of a region that is not painted comes back black, which is
+    // indistinguishable from a genuinely black element. Scroll it in first.
+    await evaluate(tabId, `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (el) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); return true })()`).catch(() => null)
+    await delay(180)
+    const again = await evaluate(tabId, `(() => {
+      const el = document.querySelector(${JSON.stringify(sel)})
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })()`)
+    if (again) { box.x = again.x; box.y = again.y; box.width = again.width; box.height = again.height }
+    if (!inViewport(box)) {
+      return {
+        url: (await pageMeta(tabId))?.url ?? '',
+        selector: sel,
+        inViewport: false,
+        painted: false,
+        hint: 'the element is outside the viewport and stayed there after scrolling, so its pixels were not painted; scroll the region yourself with bsb_act scroll or capture it with bsb_capture',
+      }
+    }
+  }
   const full = await send(tabId, 'Page.captureScreenshot', { format: 'png' })
   if (!full || !full.data) throw fail('NO_FRAME', 'the page returned an empty screenshot')
   const dims = pngSize(full.data)
@@ -6433,6 +6586,7 @@ async function inspectPage({ selector, offset, limit, text: withText, href: with
  */
 function feedMerge(state, read) {
   const items = Array.isArray(read && read.items) ? read.items : []
+  state.skippedHidden = (state.skippedHidden ?? 0) + (Number(read?.skippedHidden) || 0)
   const current = new Set()
   let added = 0
   for (const item of items) {
@@ -6473,10 +6627,15 @@ function feedCollect(selector, dedupeBy) {
   const preferText = dedupeBy === 'text'
   const out = []
   let unkeyed = 0
+  let skippedHidden = 0
   for (const el of nodes) {
     const r = el.getBoundingClientRect()
     const rendered = r.width > 0 && r.height > 0
-    const inView = rendered && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
+    // A node with no box is stale DOM left by a previous view (Gmail keeps the
+    // old inbox rows as display:none). It is not an item of the current feed,
+    // and counting it inflates the result with rows that do not match.
+    if (!rendered) { skippedHidden += 1; continue }
+    const inView = r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
     let href = ''
     if (el.matches('a[href]')) {
       const own = typeof el.href === 'string' ? el.href : (el.getAttribute('href') || '')
@@ -6504,7 +6663,7 @@ function feedCollect(selector, dedupeBy) {
     if (full.length > 240) item.textTruncated = true
     out.push(item)
   }
-  return { matched: nodes.length, unkeyed, items: out }
+  return { matched: nodes.length, unkeyed, skippedHidden, items: out }
 }
 
 /**
@@ -6601,6 +6760,7 @@ async function feedPage({ selector, maxItems, scroll, dedupeBy, until, forceActi
     recycledKeys: new Set(),
     duplicatesDropped: 0,
     recycled: 0,
+    skippedHidden: 0,
     cap,
   }
   let scrolls = 0
@@ -6683,6 +6843,7 @@ async function feedPage({ selector, maxItems, scroll, dedupeBy, until, forceActi
     reason,
     matched: lastMatched,
     unkeyed: lastUnkeyed,
+    skipped: state.skippedHidden,
     maxItems: cap,
     dedupeBy: keyMode,
     scroll: wantScroll,
@@ -6693,6 +6854,9 @@ async function feedPage({ selector, maxItems, scroll, dedupeBy, until, forceActi
   if (untilError) reply.untilError = untilError
   if (forced) reply.forced = { applied: forced.applied, held: true, reused: Boolean(forced.reused), released, cleared: released }
   else if (forcedError) reply.forceActiveError = forcedError
+  if (state.skippedHidden > 0) {
+    reply.hint = `skipped ${state.skippedHidden} matched node(s) with no box: they are stale DOM from a previous view, not items of this feed`
+  }
   if (state.items.length === 0) {
     if (visibility === 'hidden' && !forcedError) reply.hint = FEED_HIDDEN_HINT
     else if (visibility !== 'hidden' && lastUnkeyed > 0) reply.hint = FEED_UNKEYED_HINT
@@ -6735,7 +6899,7 @@ async function networkPage({ action, limit, filter, detail, fields, tabId: hint 
     }
     if (level === 'full') return entry
     const out = {}
-    for (const key of ['at', 'method', 'url', 'type', 'status', 'mime', 'error']) {
+    for (const key of ['at', 'method', 'url', 'type', 'status', 'mime', 'error', 'download', 'note']) {
       if (entry[key] !== undefined) out[key] = entry[key]
     }
     // Body sizes matter more than bodies: they say whether a payload is worth
@@ -6864,8 +7028,21 @@ async function closeTab({ tabId }) {
   if (!Number.isInteger(id)) throw fail('BAD_ARGUMENT', 'tabId must be a number')
   const tracked = await getTrackedId()
   await chrome.tabs.remove(id)
-  if (tracked === id) await chrome.storage.local.remove('tabId')
-  return { tabId: id, closed: true }
+  if (tracked !== id) return { tabId: id, closed: true, tracked: false }
+  // Closing the tracked tab used to leave no page tracked, so the documented
+  // housekeeping action broke every later call. Fall back to a scriptable tab.
+  const tabs = await chrome.tabs.query({}).catch(() => [])
+  const candidates = (tabs ?? []).filter((tab) => tab.id !== id && !isInternalUrl(tab.url))
+  const next = candidates.find((tab) => tab.active) ?? candidates[0]
+  if (next) {
+    await trackId(next.id)
+    return { tabId: id, closed: true, tracked: true, nextTracked: next.id }
+  }
+  await chrome.storage.local.remove('tabId')
+  return {
+    tabId: id, closed: true, tracked: true, nextTracked: null,
+    hint: 'the tracked tab was closed and no scriptable tab remains; call bsb_open to open one',
+  }
 }
 
 /** Bounded markup of the whole document or one selector. */
