@@ -1334,6 +1334,21 @@ try {
       /document\.activeElement/.test(workerSource) && /tag !== 'body'/.test(workerSource),
       'key text verification no longer keys off the focused element and skips a body/canvas page',
     )
+    // 2202 follow-up: a canvas editor parks focus in an offscreen iframe, so the
+    // editor probe never applies there. Google Docs keeps a live text mirror in
+    // the navigation panel; measure it instead of returning no verification.
+    assert.ok(
+      /\.navigation-item-content/.test(workerSource) && /\.kix-wordhtmlgenerator-word/.test(workerSource),
+      'key text verification lost the canvas-editor document mirror',
+    )
+    assert.ok(
+      /source: mirror === null \? 'editor' : 'document-mirror'/.test(workerSource),
+      'key text verification no longer names the measured source',
+    )
+    assert.ok(
+      /textSource: before\.source/.test(workerSource) && /textVerified: false/.test(workerSource),
+      'key text verification lost textSource or the unmeasurable-run note',
+    )
     assert.ok(/const inView = Boolean\(rect\)/.test(workerSource), 'key text verification no longer skips an offscreen key shim')
     // 2212: a modifier named in keys is a real chord, not three bare keys.
     assert.ok(/function chordPlan/.test(workerSource) && /MODIFIER_KEY_BITS/.test(workerSource), 'keys:[...] lost its chord planner')

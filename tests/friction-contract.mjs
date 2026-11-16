@@ -248,5 +248,22 @@ expect('withdrawn closure without the reporter fails', (root) => {
   }))
 }, { code: 1, includes: ['withdrawn closure requires result: withdrawn'] })
 
+// Timestamps are how a reader orders a ticket against a build.
+expect('non-ISO timestamp fails', (root) => {
+  writeTicket(root, 'inbox', 'BSB-20261116-0914-baddate.md', ticket({
+    id: 'BSB-20261116-0914-baddate',
+    status: 'open',
+    extra: { created: '16 November 2026' },
+  }))
+}, { code: 1, includes: ['created must be an ISO timestamp'] })
+
+expect('updated before created fails', (root) => {
+  writeTicket(root, 'inbox', 'BSB-20261116-0915-backwards.md', ticket({
+    id: 'BSB-20261116-0915-backwards',
+    status: 'open',
+    extra: { created: '2026-11-16T10:00:00+07:00', updated: '2026-11-15T10:00:00+07:00' },
+  }))
+}, { code: 1, includes: ['updated is earlier than created'] })
+
 for (const root of roots) rmSync(root, { recursive: true, force: true })
 console.log(`\nfriction contract passed (${cases} cases)`)

@@ -372,7 +372,8 @@ whose app never booted. The replies now carry that difference.
 | Click by text says the text is absent | read `reason` and `candidates`: a zero-size, `pointer-events:none` or `aria-hidden` node holds the text. Press a candidate box or its nearest clickable ancestor |
 | Typing lost / `TYPE_NOT_APPLIED` | read the value back; check the target is the visible editor, not an offscreen measurer; `submit`; check masks/framework setter |
 | `NOT_FOCUSED` on type | read `activeElement`: the page moved focus elsewhere (a name box handing focus to the grid, an overlay, a disabled field). Click the target again and check it is not covered |
-| Key text absent or `EDITOR_LOST_TEXT` | read `textLenBefore`/`textLenAfter` and the excerpt: the run did not land or the editor ate the selection. Re-read the page before retrying |
+| Key text absent or `EDITOR_LOST_TEXT` | read `textLenBefore`/`textLenAfter`, `textSource` and the excerpt: the run did not land or the editor ate the selection. `textSource:"document-mirror"` means a canvas editor (Google Docs) was measured through its text mirror. Re-read the page before retrying |
+| `textVerified:false` on a key text run | the focused element was not a measurable editor (a canvas game, an iframe target). The note says why; confirm the result with `bsb_read` or `bsb_capture` |
 | Long `key text` run lost its tail | read `truncated`/`droppedKeys`: the cap is 5000 characters per call. Send the rest in a second call |
 | `keys:[...]` shortcut did not fire | read `modifiers` in the reply; a chord that was not delivered reports `modifiers:0`. Use `keys` with modifier names or `key` plus `modifiers:["Control"]` |
 | Paste inserted nothing | click the field or cell first (or pass `target`); read `mode` and the note: `insertText` is not a native paste; front the tab so the browser paste command is enabled |

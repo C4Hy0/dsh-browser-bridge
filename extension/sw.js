@@ -3241,14 +3241,30 @@ const keyTextProbeExpr = (prefix) => `(() => {
   const inView = Boolean(rect) && rect.width >= 2 && rect.height >= 2
     && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth
     && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));
+  const editorApplies = inView && (tag === 'textarea' || textInput || (el && el.isContentEditable === true) || role === 'textbox') && tag !== 'body' && tag !== 'html';
+  // A canvas editor renders its text to a canvas and parks focus in an offscreen
+  // iframe, so there is no editor element to measure. Google Docs keeps a live
+  // text mirror in the navigation panel; older builds used a word layer. Read it
+  // only when the focused element is not a measurable editor, so a normal input
+  // is never second-guessed by page chrome that happens to share the class.
+  let mirror = null;
+  if (!editorApplies) {
+    let mirrorText = '';
+    for (const node of document.querySelectorAll('.navigation-item-content, .kix-wordhtmlgenerator-word')) {
+      mirrorText += String(node.textContent || '');
+    }
+    if (mirrorText.length > 0) mirror = mirrorText;
+  }
+  const measured = mirror === null ? text : mirror;
   return {
-    applies: inView && (tag === 'textarea' || textInput || (el && el.isContentEditable === true) || role === 'textbox') && tag !== 'body' && tag !== 'html',
+    applies: editorApplies || mirror !== null,
+    source: mirror === null ? 'editor' : 'document-mirror',
     tag,
     url: location.href,
-    textLen: text.length,
+    textLen: measured.length,
     ownLen: own.length,
-    landed: wanted.length > 0 && (flat.indexOf(wanted) !== -1 || squash(own).indexOf(wanted) !== -1),
-    excerpt: flat.slice(0, 120),
+    landed: wanted.length > 0 && (squash(measured).indexOf(wanted) !== -1 || squash(own).indexOf(wanted) !== -1),
+    excerpt: squash(measured).slice(0, 120),
   };
 })()`
 
@@ -3267,7 +3283,7 @@ function keyTextVerification(before, after, prefix, sent) {
   if (!after) {
     return { textLenBefore: before.textLen, textVerified: false, textVerifyNote: 'the page could not be read after the run' }
   }
-  const fields = { textLenBefore: before.textLen, textLenAfter: after.textLen }
+  const fields = { textLenBefore: before.textLen, textLenAfter: after.textLen, textSource: before.source || 'editor' }
   if (after.url !== before.url) {
     return { ...fields, textVerified: false, textVerifyNote: 'the page navigated during the run, so the text was delivered before it changed' }
   }
@@ -3373,13 +3389,23 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       await delay(gap)
     }
     const meta = await pageMeta(tabId)
+    // A canvas editor paints its text mirror on the next render tick, so reading
+    // it in the same task would compare against the pre-run state.
+    if (probe?.source === 'document-mirror') await delay(250)
     const after = probe?.applies === true
       ? await evaluate(tabId, keyTextProbeExpr(prefix)).catch(() => null)
       : null
     if (forced) await clearForced(tabId, forced)
     const verification = probe?.applies === true
       ? keyTextVerification(probe, after, prefix, chars.length)
-      : null
+      // No measurable text is not a silent omission: say the run could not be
+      // checked, so a caller never mistakes an absent field for a pass.
+      : {
+          textVerified: false,
+          textVerifyNote: probe
+            ? 'the focused element is not a text editor and the page exposes no document text mirror, so the run could not be measured; confirm the result with bsb_read or bsb_capture'
+            : 'the page could not be read, so the run could not be measured',
+        }
     return {
       url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length,
       requestedKeys: requested.length, truncated, droppedKeys: requested.length - chars.length,
