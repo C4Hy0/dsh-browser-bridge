@@ -12,7 +12,7 @@ import { join as joinPath } from 'node:path'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 
-import { Bridge } from '../bridge.js'
+import { Bridge, translateFilePath } from '../bridge.js'
 import { detectLabel } from '../extension/identity.js'
 
 const PORT = 18791
@@ -49,6 +49,19 @@ try {
     assert.equal(value.active, '', 'bsb_browsers lost the active-browser getter')
     assert.ok(Array.isArray(value.browsers), 'bsb_browsers lost the browser list method')
     console.log('ok  tools reach the bridge through its proxy')
+  }
+
+  // A host path is not a browser path. The bridge runs in WSL and the browser
+  // often runs on Windows; Chrome accepts a Linux path and attaches a zero-byte
+  // file, so an import reports success over an empty sheet.
+  {
+    const windows = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    const linux = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+    assert.equal(translateFilePath('/mnt/c/Users/HP Laptop/a.csv', windows), 'C:\\Users\\HP Laptop\\a.csv')
+    assert.equal(translateFilePath('/tmp/a.csv', windows, 'Debian'), '\\\\wsl.localhost\\Debian\\tmp\\a.csv')
+    assert.equal(translateFilePath('/tmp/a.csv', linux), '/tmp/a.csv')
+    assert.equal(translateFilePath('C:\\Users\\a.csv', windows), 'C:\\Users\\a.csv')
+    console.log('ok  host file paths are translated for a Windows browser')
   }
 
   // 2. Wrong token is indistinguishable from a missing route.

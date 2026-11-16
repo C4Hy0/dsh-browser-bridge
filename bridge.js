@@ -19,9 +19,30 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.1.282'
+export const VERSION = '1.1.283'
 
 /** Messages this class throws carry a stable code the tools pass through. */
+/**
+ * Translate a host file path for a browser that runs on another platform.
+ *
+ * The bridge runs in WSL and the browser often runs on Windows. A Linux path
+ * that the host can read does not exist for the browser, and Chrome accepts it
+ * anyway: `DOM.setFileInputFiles` attaches a file entry with the right name and
+ * zero bytes, so an import reports "Success!" over an empty sheet. Translate at
+ * the transport boundary, where the browser's user agent is known.
+ */
+export function translateFilePath(file, userAgent = '', distro = '') {
+  if (typeof file !== 'string' || file.length === 0) return file
+  if (!/windows/i.test(String(userAgent))) return file
+  const path = file.trim()
+  if (!path.startsWith('/')) return path
+  const drive = /^\/mnt\/([a-z])\/(.*)$/i.exec(path)
+  if (drive) return `${drive[1].toUpperCase()}:\\${drive[2].replace(/\//g, '\\')}`
+  const name = distro || process.env.WSL_DISTRO_NAME || ''
+  if (!name) return path
+  return `\\\\wsl.localhost\\${name}${path.replace(/\//g, '\\')}`
+}
+
 export class BridgeError extends Error {
   constructor(code, message) {
     super(message)
@@ -294,6 +315,10 @@ export class Bridge {
       })
       entry.lastCommandAt = Date.now()
       const enriched = { ...params }
+      // A file path from this host may not exist on the browser's machine.
+      if ((method === 'upload' || method === 'drop') && Array.isArray(enriched.files) && enriched.files.length > 0) {
+        enriched.files = enriched.files.map((file) => translateFilePath(file, entry.userAgent))
+      }
       // Tab identity lives on the host too: extension storage can be wiped by a
       // reload between two tool calls, which would orphan the page.
       if (enriched.tabId === undefined && entry.lastTabId !== undefined && method !== 'open' && method !== 'tabs') {
