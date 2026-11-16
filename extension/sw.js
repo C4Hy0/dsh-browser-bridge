@@ -1665,7 +1665,11 @@ async function requirePage(hint) {
   if (typeof hint === 'number') {
     try {
       const tab = await chrome.tabs.get(hint)
-      if (tab) { await trackId(tab.id); return tab.id }
+      // An explicit tabId addresses that tab for this call only. Adopting it
+      // silently moved the tracked tab, so reading a second tab while driving
+      // the first retargeted every later call. Only bsb_open and bsb_tabs use
+      // change the tracked tab.
+      if (tab) return tab.id
     } catch {}
   }
   const tab = await trackedTab()

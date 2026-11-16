@@ -1303,6 +1303,19 @@ try {
   }
   console.log('ok  dev fixtures live in tests/ and are served from there')
 
+  // An explicit tabId addresses a tab for one call. Adopting it silently moved
+  // the tracked tab, so reading a second tab while driving the first retargeted
+  // every later call (and would let one agent steal another's target).
+  {
+    const body = workerSource.slice(
+      workerSource.indexOf('async function requirePage('),
+      workerSource.indexOf('async function ', workerSource.indexOf('async function requirePage(') + 10),
+    )
+    assert.ok(body.length > 0, 'extension/sw.js lost requirePage')
+    assert.ok(!/trackId\(/u.test(body), 'requirePage adopts an explicit tabId instead of addressing it for one call')
+    console.log('ok  an explicit tabId does not move the tracked tab')
+  }
+
   // Guards from the CaptchaWare run. Each of these was a silent failure or a
   // missing primitive that cost a workaround, so pin the contract: wheel input,
   // key-driven text, cross-origin frame reads, non-editable type targets,
