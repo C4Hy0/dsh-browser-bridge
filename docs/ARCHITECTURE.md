@@ -16,9 +16,10 @@ agent tool call
 
 ## Layers
 
-1. Extension worker (`extension/sw.js`). Holds the debugger session, speaks CDP,
-   exposes the worker command table, and runs the guarded evaluation world. It
-   never talks to the model.
+1. Extension worker (`extension/sw.js` plus `extension/lib/` and
+   `extension/commands/`). Holds the debugger session, speaks CDP, exposes the
+   worker command table, and runs the guarded evaluation world. It never talks
+   to the model.
 2. Transport (`bridge.js`). Owns the token, one queue per browser, the long poll
    and result matching. It has no page access of its own.
 3. Tools (`tools.js`). Registers the ten `bsb_*` tools: validation, defaults and
@@ -55,9 +56,10 @@ The plugin inspects pages and sends input. It does not edit them.
   (`chrome.windows.update` only ever receives `{focused:true}`), never installs a
   device-metrics override, and never changes page zoom. A minimized window stays
   minimized and the tool reports `TAB_NOT_VISIBLE`.
-- No focus or lifecycle emulation. `Emulation.setFocusEmulationEnabled` and a
-  forced `Page.setWebLifecycleState` are never sent. A background tab stays
-  throttled, and the tools report the frame rate they measure.
+- No focus or lifecycle emulation outside the named `forceActive` escape hatch.
+  `Emulation.setFocusEmulationEnabled` and a forced `Page.setWebLifecycleState`
+  are sent only there, and only when the caller asks for it. A background tab
+  stays throttled, and the tools report the frame rate they measure.
 - Document-start scripts are the other opt-in escape hatch. `bsb_eval`
   `installOnNewDocument` registers page code that runs before the document's own
   scripts in every new document, across reloads, until removed or the debugger

@@ -947,8 +947,14 @@ export async function sheetPage({ selector, offset, limit, scale, columns, tabId
       })
       if (full?.data) {
         const dims = pngSize(full.data)
-        pageShot = full.data
-        pageRatio = dims.width > 0 ? dims.width / pageSize.w : 1
+        const ratio = dims.width > 0 ? dims.width / pageSize.w : 1
+        // A capture that returned only the viewport would leave every match
+        // above the fold outside the image and paint black tiles. Accept it
+        // only when it really covers the document height.
+        if (dims.height >= pageSize.h * ratio - 2) {
+          pageShot = full.data
+          pageRatio = ratio
+        }
       }
     }
   } catch {}

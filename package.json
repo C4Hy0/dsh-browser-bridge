@@ -1,6 +1,6 @@
 {
   "name": "browser-bridge",
-  "version": "1.1.299",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Drive the browser you are signed into through a paired Chromium extension: ten tools over the DevTools Protocol.",
@@ -42,15 +42,15 @@
   },
   "license": "MIT",
   "author": {
-    "name": "Jidaron"
+    "name": "C4Hy0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Jidaron/dsh-browser-bridge.git"
+    "url": "git+https://github.com/C4Hy0/dsh-browser-bridge.git"
   },
-  "homepage": "https://github.com/Jidaron/dsh-browser-bridge#readme",
+  "homepage": "https://github.com/C4Hy0/dsh-browser-bridge#readme",
   "bugs": {
-    "url": "https://github.com/Jidaron/dsh-browser-bridge/issues"
+    "url": "https://github.com/C4Hy0/dsh-browser-bridge/issues"
   },
   "keywords": [
     "browser-automation",

@@ -1,6 +1,6 @@
 # browser-bridge protocol and command reference
 
-This document describes host 1.1.296 and extension 1.0.281. Where it disagrees
+This document describes host 1.2.0 and extension 1.1.0. Where it disagrees
 with the code, the code wins: `extension/sw.js` holds the worker command table,
 `tools.js` the model-facing schemas, and `bridge.js` the HTTP routes.
 
@@ -98,7 +98,7 @@ Parameters and result shapes live in the tool schemas and the worker handlers.
 `bsb_browsers`, `bsb_tabs`, `bsb_open`, `bsb_read`, `bsb_act`, `bsb_eval`,
 `bsb_wait_for`, `bsb_observe`, `bsb_capture`, `bsb_pixels`.
 
-- Root schemas are `type: 'object'`. Calls time out after 45 s.
+- Root schemas are `type: 'object'`. Calls time out after 45 s; a sheet capture gets 180 s because it is a bulk read.
 - Every page tool accepts `browser`. `bsb_act`, `bsb_eval`, `bsb_wait_for`,
   `bsb_capture`, `bsb_pixels`, `bsb_read` and `bsb_open` accept `frame` where a
   frame target applies.
@@ -123,8 +123,8 @@ Parameters and result shapes live in the tool schemas and the worker handlers.
 - The popup holds the pairing field and the server list.
 
 The worker is an ES module (`"type": "module"`), split by domain. The extension
-root keeps `manifest.json`, `popup.html` and the entry `sw.js`; everything else
-is grouped:
+root keeps `manifest.json`, `popup.html` and the entry `sw.js`; assets live in
+`assets/`, and everything else is grouped:
 
 | File | Contents |
 |---|---|
@@ -155,6 +155,8 @@ is grouped:
 | `commands/input/drive.js` | drive, measure |
 | `commands/input/force.js` | forceActive and releaseActive wrappers |
 | `popup/popup.js` | the popup script, loaded by `popup.html` |
+| `assets/icons/` | the extension icons, referenced by the manifest and the popup |
+| `assets/fonts/` | the two bundled webfonts and their licence |
 
 Shared state is one object because an ES module `let` cannot be reassigned
 across modules. The six functions that are serialized into the page
@@ -283,6 +285,7 @@ extension/        MV3 manifest, popup.html and the worker entry sw.js
 extension/lib/    worker infrastructure (state, cdp, page functions, discovery)
 extension/commands/  command domains, with input/ split by action
 extension/popup/  the popup script
+extension/assets/ icons and fonts
 scripts/          zip packer and the extension public key
 skill/            bundled browser-bridge playbook
 docs/images/      screenshots used by the README

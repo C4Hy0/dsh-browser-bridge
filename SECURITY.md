@@ -10,7 +10,7 @@ browser-bridge exposes ten tools that drive a real, signed-in Chromium browser o
 
 ## Supported versions
 
-One development line, `main`. Fixes, including security fixes, land there and are not backported to older commits, tags, or forks. The latest commit on `main` is the only supported version. The `v1.1.273` tag is a snapshot, not a maintained branch.
+One development line, `main`. Fixes, including security fixes, land there and are not backported to older commits, tags, or forks. The latest commit on `main` is the only supported version. The `v1.2.0` tag is a snapshot, not a maintained branch.
 
 There is no fixed support window. If you run an older copy, update first:
 

@@ -285,7 +285,7 @@ try {
       assert.ok(info.rebuilt, 'the first pack did not build a zip')
       const zip = readFileSync(joinPath(tmp, ZIP_NAME))
       assert.equal(zip.subarray(0, 4).toString('hex'), '504b0304', 'the download is not a zip')
-      for (const name of ['manifest.json', 'popup.html', 'sw.js', 'icons/icon16.png']) {
+      for (const name of ['manifest.json', 'popup.html', 'sw.js', 'assets/icons/icon16.png']) {
         assert.ok(zip.includes(Buffer.from(name)), `zip is missing ${name}`)
       }
       assert.ok(zip.includes(Buffer.from('"key"')), 'packed manifest lost the pinned public key')
@@ -660,12 +660,12 @@ try {
   // the popup still renders, just in the fallback face.
   {
     const html = await readFile(new URL('../extension/popup.html', import.meta.url), 'utf8')
-    const referenced = [...html.matchAll(/url\('fonts\/([^']+)'\)/g)].map((m) => m[1])
+    const referenced = [...html.matchAll(/url\('assets\/fonts\/([^']+)'\)/g)].map((m) => m[1])
     assert.ok(referenced.length > 0, 'popup declares no bundled font')
     for (const file of referenced) {
       assert.ok(
-        existsSync(new URL(`../extension/fonts/${file}`, import.meta.url)),
-        'popup references a font that is not bundled: fonts/' + file,
+        existsSync(new URL(`../extension/assets/fonts/${file}`, import.meta.url)),
+        'popup references a font that is not bundled: assets/fonts/' + file,
       )
     }
     const families = [...html.matchAll(/font-family: '([^']+)'/g)].map((m) => m[1])
@@ -1375,7 +1375,7 @@ try {
     assert.ok(/showing \$\{shown\} of \$\{samples\.length\}/.test(toolsSource), 'the timeline renderer still hides its truncation')
     assert.ok(/recording: shared\.recorder\.done !== true/.test(workerSource) && /lastRecording/.test(workerSource), 'record status still reports a finished recording as live')
     assert.ok(/capture\(record\) \$\{state\}/.test(toolsSource), 'the record status line still omits liveness')
-    assert.ok(/captureBeyondViewport: true/.test(workerSource) && /blank: blank > 0/.test(workerSource), 'sheet still crops black tiles for offscreen matches')
+    assert.ok(/captureBeyondViewport: true/.test(workerSource) && /blank: blank > 0/.test(workerSource) && /dims\.height >= pageSize\.h \* ratio/.test(workerSource), 'sheet still crops black tiles for offscreen matches')
     assert.ok(/assertFilesReadable/.test(workerSource) && /FILE_NOT_READABLE/.test(workerSource), 'upload still accepts a 0-byte attachment')
     assert.ok(/frameContextId/.test(workerSource) && !/let frameContext[^I]/.test(workerSource), 'the key frame probe still shadows frameContext')
     console.log('ok  evening-batch guards pinned (timeline, record status, sheet tiles, upload size, frame probe)')
