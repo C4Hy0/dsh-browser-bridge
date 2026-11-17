@@ -208,6 +208,22 @@ function renderCapture(_args, value) {
     ? ` @${Number(value.scale.toFixed(3))}x`
     : ''
   const size = value?.width && value?.height ? ` ${value.width}x${value.height}${scaleNote}` : ''
+  if (value?.mode === 'probe') {
+    return [textBlock(
+      `capture(record) probe · ${value.frames} frames · ${value.frameMs}ms/frame · ${value.fps} fps · ${value.frameWidth}x${value.frameHeight}`
+      + (value.beyond ? ' · beyond viewport' : ''),
+    )]
+  }
+  if (value?.recording !== undefined && value?.armed !== true) {
+    // status: liveness first, so a finished recording is never read as live.
+    const state = value.recording === true ? 'running' : 'finished'
+    const elapsed = Number(value.elapsedMs) || 0
+    const cap = typeof value?.maxMs === 'number' && value.maxMs > 0 ? ` · auto-stops at ${value.maxMs}ms` : ''
+    const last = value?.last
+      ? ` · last recording: ${value.last.frames} frames${value.last.spanMs ? ` over ${value.last.spanMs}ms` : ''}`
+      : ''
+    return [textBlock(`capture(record) ${state} · ${frames} frames · ${elapsed}ms${cap}${last}`)]
+  }
   if (armed) {
     // An armed recording legitimately has zero frames. Saying just "0 frames"
     // reads as a failure, so state the mode, the cadence and the next step.
@@ -749,7 +765,7 @@ export function registerTools(ctx, bridge) {
         // Every field the renderer or the model may need has to be listed here:
         // this loop is a whitelist, so a new reply field that is not added here
         // is silently dropped between the extension and the tool result.
-        for (const key of ['intervalMs', 'spanMs', 'skipped', 'received', 'mode', 'frameMs', 'fastestMs', 'medianMs', 'slowestMs', 'fps', 'bytes', 'frameWidth', 'frameHeight', 'shown', 'stripped', 'sheetColumns', 'sheetRows', 'maxFrames', 'maxStrip', 'maxMs', 'columns', 'remainingMs', 'actualIntervalMs', 'autoStopped', 'error', 'warning', 'next', 'clickedText', 'clickError']) {
+        for (const key of ['recording', 'done', 'armedAt', 'last', 'armed', 'elapsedMs', 'intervalMs', 'spanMs', 'skipped', 'received', 'mode', 'frameMs', 'fastestMs', 'medianMs', 'slowestMs', 'fps', 'bytes', 'frameWidth', 'frameHeight', 'shown', 'stripped', 'sheetColumns', 'sheetRows', 'maxFrames', 'maxStrip', 'maxMs', 'columns', 'remainingMs', 'actualIntervalMs', 'autoStopped', 'error', 'warning', 'next', 'clickedText', 'clickError']) {
           if (raw?.[key] !== undefined) record[key] = raw[key]
         }
         if (typeof raw?.url === 'string' && raw.url) record.url = raw.url
@@ -778,7 +794,9 @@ export function registerTools(ctx, bridge) {
             columns: args?.columns,
             scale: args?.scale,
           },
-          { browser, timeoutMs: TIMEOUT_MS },
+          // A sheet is a bulk read: one capture per match on a tall page can
+          // legitimately outlast the usual tool timeout.
+          { browser, timeoutMs: 180000 },
         )
         const data = Buffer.from(String(raw?.pngBase64 ?? ''), 'base64')
         if (data.length === 0) throw new Error('the browser returned no image data')
@@ -1397,11 +1415,17 @@ export function registerTools(ctx, bridge) {
         const moved = first && last ? { dx: Math.round((last.x - first.x) * 10) / 10, dy: Math.round((last.y - first.y) * 10) / 10 } : null
         const coloured = samples.filter((sample) => Array.isArray(sample.colour))
         const summary = coloured.length ? ` · canvas ${coloured[0].colour.length} cells/axis` : ''
+        const shown = Math.min(samples.length, 40)
+        const observed = value.observedMs ?? value.elapsed
+        const truncated = samples.length > shown
+          ? `\nnote: showing ${shown} of ${samples.length} samples; the last shown is t=${samples[shown - 1]?.t ?? '?'} of ${observed} ms. Raise intervalMs to sample less densely.`
+          : ''
         return [
           textBlock(
-            `timeline "${value.selector}" — ${samples.length} samples / ${value.elapsed} ms · ${value.fps ?? '?'} fps${summary}` +
+            `timeline "${value.selector}" — ${samples.length} samples / ${observed} ms · ${value.fps ?? '?'} fps${summary}` +
               (moved ? `\nbox ${first.x},${first.y} ${first.w}x${first.h} → ${last.x},${last.y} ${last.w}x${last.h} (Δ ${moved.dx},${moved.dy})` : '') +
-              `\n${JSON.stringify(samples.slice(0, 40), null, 0)}`,
+              truncated +
+              `\n${JSON.stringify(samples.slice(0, shown), null, 0)}`,
           ),
         ]
       },

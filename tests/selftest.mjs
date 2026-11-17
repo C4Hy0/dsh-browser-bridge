@@ -1358,6 +1358,19 @@ try {
     console.log('ok  fleet-batch guards pinned (covered clicks, tracking fallback, pixels, feed skip, download, PDF, wait hint, frame key, remote paths)')
   }
 
+  // Guards from the 2026-11-17 evening batch.
+  {
+    assert.ok(/badSelector/.test(workerSource) && /BAD_SELECTOR/.test(workerSource), 'a malformed timeline selector is still reported as no data')
+    assert.ok(/samplesCollected/.test(workerSource) && /observedMs/.test(workerSource), 'timeline no longer reports the collected count and observed window')
+    assert.ok(/showing \$\{shown\} of \$\{samples\.length\}/.test(toolsSource), 'the timeline renderer still hides its truncation')
+    assert.ok(/recording: recorder\.done !== true/.test(workerSource) && /lastRecording/.test(workerSource), 'record status still reports a finished recording as live')
+    assert.ok(/capture\(record\) \$\{state\}/.test(toolsSource), 'the record status line still omits liveness')
+    assert.ok(/captureBeyondViewport: true/.test(workerSource) && /blank: blank > 0/.test(workerSource), 'sheet still crops black tiles for offscreen matches')
+    assert.ok(/assertFilesReadable/.test(workerSource) && /FILE_NOT_READABLE/.test(workerSource), 'upload still accepts a 0-byte attachment')
+    assert.ok(/frameContextId/.test(workerSource) && !/let frameContext[^I]/.test(workerSource), 'the key frame probe still shadows frameContext')
+    console.log('ok  evening-batch guards pinned (timeline, record status, sheet tiles, upload size, frame probe)')
+  }
+
   // Guards from the CaptchaWare run. Each of these was a silent failure or a
   // missing primitive that cost a workaround, so pin the contract: wheel input,
   // key-driven text, cross-origin frame reads, non-editable type targets,

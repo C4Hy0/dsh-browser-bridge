@@ -397,6 +397,27 @@ async function runCommand(command) {
  *   access to the frame document, which is what makes a cross-origin picker
  *   reachable at all.
  */
+/** Fail when the page received a file it cannot read (0 bytes). */
+async function assertFilesReadable(tabId, selector, contextId) {
+  const expression = `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el || !el.files) return null;
+    return Array.from(el.files).map((f) => ({ name: f.name, size: f.size }));
+  })()`
+  const read = contextId === undefined
+    ? await evaluate(tabId, expression).catch(() => null)
+    : await evaluateInContext(tabId, contextId, expression).catch(() => null)
+  if (!Array.isArray(read) || read.length === 0) return
+  const empty = read.filter((file) => Number(file.size) === 0)
+  if (empty.length > 0) {
+    throw fail(
+      'FILE_NOT_READABLE',
+      `the page received ${empty.map((file) => file.name).join(', ')} with 0 bytes: the browser could not read the file path. `
+      + 'On a remote browser, pass a path that exists on that machine, or serve the file over http and download it there. Nothing usable was attached.',
+    )
+  }
+}
+
 async function uploadPage({ target, files, frame, x, y, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
   const list = Array.isArray(files)
@@ -452,6 +473,8 @@ async function uploadPage({ target, files, frame, x, y, forceActive: forceWanted
     }
     await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
     await delay(150)
+    const context = await guardedContext(tabId, hit.frameId).catch(() => undefined)
+    await assertFilesReadable(tabId, selector, context)
     const meta = await pageMeta(tabId)
     return { url: meta?.url ?? '', title: meta?.title ?? '', count: list.length, files: names, via: 'frame', nodeId: found.nodeId, frameId: hit.frameId }
   }
@@ -466,6 +489,7 @@ async function uploadPage({ target, files, frame, x, y, forceActive: forceWanted
       if (isFileInputNode(node)) {
         await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
         await delay(150)
+        await assertFilesReadable(tabId, selector)
         const meta = await pageMeta(tabId)
         return { url: meta?.url ?? '', title: meta?.title ?? '', count: list.length, files: names, via: 'input', nodeId: found.nodeId }
       }
@@ -3444,15 +3468,21 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
   const tabId = await requirePage(hint)
   // A framed key run lands in the frame's document, so the probe must read that
   // document; the top page's activeElement is body and looks unmeasurable.
-  let frameContext
+  // The local must not be named `frameContext`: a `let` of that name shadows the
+  // helper function, so the call throws and the catch silently falls back to the
+  // top document, where a framed key run looks unmeasurable.
+  let frameContextId
+  let frameId
   if (frame !== undefined && frame !== null && String(frame).trim() !== '') {
     try {
-      frameContext = (await frameContext(tabId, frame)).contextId
+      const hit = await frameContext(tabId, frame)
+      frameContextId = hit.contextId
+      frameId = hit.frame?.frameId
     } catch {}
   }
-  const probeIn = async (expression) => (frameContext === undefined
+  const probeIn = async (expression) => (frameContextId === undefined
     ? evaluate(tabId, expression)
-    : evaluateInContext(tabId, frameContext, expression))
+    : evaluateInContext(tabId, frameContextId, expression))
   // forceActive:true is the escape hatch for a page whose frame clock has
   // stopped (a sleeping display leaves the tab "hidden" and rAF paused, so
   // input would be held). It is never installed on attach and it never happens
@@ -3552,7 +3582,7 @@ async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, targ
       url: meta?.url ?? '', title: meta?.title ?? '', key: 'text', times: chars.length, sentKeys: chars.length,
       requestedKeys: requested.length, truncated, droppedKeys: requested.length - chars.length,
       tabs, enters, mode: bulk ? 'insertText' : 'keys', keySemantics: bulk ? 'insertText' : 'keydown-keyup',
-      modifiers: [], ...(verification ?? {}), ...inputSuccess(visibility, forced),
+      modifiers: [], ...(frameId ? { frameId } : {}), ...(verification ?? {}), ...inputSuccess(visibility, forced),
     }
   }
   const specFor = (raw) => {
@@ -4735,6 +4765,8 @@ const clampInt = (value, min, max, fallback) => {
 }
 
 let recorder = null
+// Summary of the last finished recording, so status can say what happened.
+let lastRecording = null
 let screencast = null
 /**
  * Tabs a recording previously emulated a viewport on.
@@ -5064,6 +5096,7 @@ async function finishRecording(state, columns) {
   const first = await frameSize(shots[0], mime)
   const times = state.times
   const spanMs = times.length > 1 ? times[times.length - 1] - times[0] : 0
+  lastRecording = { at: Date.now(), frames: shots.length, mode: state.mode, spanMs, autoStopped: state.maxMs > 0 }
   return {
     url: state.url,
     title: state.title,
@@ -5180,16 +5213,21 @@ async function recordPage(params = {}) {
     }
   }
   if (action === 'status') {
-    if (!recorder) return { recording: false, frames: 0 }
+    if (!recorder) return { recording: false, done: true, frames: 0, last: lastRecording ?? null }
     return {
-      recording: true,
+      recording: recorder.done !== true,
+      done: recorder.done === true,
+      armedAt: recorder.startedAt,
+      maxMs: recorder.maxMs,
+      last: lastRecording ?? null,
       frames: recorder.shots.length,
       skipped: recorder.skipped,
       received: recorder.received,
       mode: recorder.mode,
       maxFrames: recorder.maxFrames,
       maxStrip: recorder.maxStrip,
-      elapsedMs: Date.now() - recorder.startedAt,
+      // A finished recording must not keep counting: report the window it ran.
+      elapsedMs: Math.min(Date.now() - recorder.startedAt, recorder.maxMs > 0 ? recorder.maxMs : Number.MAX_SAFE_INTEGER),
       remainingMs: recorder.maxMs > 0 ? Math.max(0, recorder.maxMs - (Date.now() - recorder.startedAt)) : null,
       next: 'call bsb_capture with action:"stop" when the moment has passed',
       window: await windowInfo(recorder.tabId),
@@ -5977,7 +6015,10 @@ async function timelinePage({ selector, durationMs, intervalMs, grid, raf, frame
     const INTERVAL = ${interval}
     const CELLS = ${cells}
     const COUNT = ${countFrames ? 'true' : 'false'}
-    const el = document.querySelector(SEL)
+    let el = null
+    try { el = document.querySelector(SEL) } catch (error) {
+      return { error: 'invalid selector: ' + String((error && error.message) || error), badSelector: true }
+    }
     if (!el) return { error: 'no element matches ' + SEL }
     const samples = []
     const t0 = performance.now()
@@ -6044,10 +6085,13 @@ async function timelinePage({ selector, durationMs, intervalMs, grid, raf, frame
     }
     running = false
     const elapsed = Math.max(1, performance.now() - t0)
-    return { selector: SEL, samples, fps: Math.round((rafs / elapsed) * 10000) / 10, elapsed: Math.round(elapsed) }
+    return { selector: SEL, samples, samplesCollected: samples.length, observedMs: Math.round(elapsed), fps: Math.round((rafs / elapsed) * 10000) / 10, elapsed: Math.round(elapsed) }
   })()`
   const value = await evaluateProgram(tabId, program, { contextId, awaitPromise: true })
-  if (!value || value.error) throw fail('NO_MATCH', String(value?.error || 'timeline returned nothing'))
+  if (!value || value.error) {
+    if (value?.badSelector) throw fail('BAD_SELECTOR', String(value.error))
+    throw fail('NO_MATCH', String(value?.error || 'timeline returned nothing'))
+  }
   return value
 }
 
@@ -6239,18 +6283,71 @@ async function sheetPage({ selector, offset, limit, scale, columns, tabId: hint 
   // device ratio, so on a zoomed profile it captures a slightly wider region than the
   // box (tiles bled into their neighbours). Take one plain surface shot and crop every
   // tile out of it with the same ratio maths the screenshot tool already uses.
-  const view = await evaluate(tabId, "({ w: window.innerWidth, h: window.innerHeight })").catch(() => ({ w: 0, h: 0 }))
-  const full = await send(tabId, "Page.captureScreenshot", { format: "png" })
-  if (!full || !full.data) throw fail("NO_FRAME", "the page returned an empty screenshot")
-  const dims = pngSize(full.data)
-  const ratio = view && view.w > 0 && dims.width > 0 ? dims.width / view.w : 1
+  // Every tile must be painted, including matches below the fold. One full-page
+  // capture (captureBeyondViewport) covers the whole document, so each tile is a
+  // crop from it: one screenshot instead of one per tile, which kept the call
+  // inside the tool timeout on a long page.
+  const scroll = await evaluate(tabId, '({ x: scrollX, y: scrollY })').catch(() => ({ x: 0, y: 0 }))
+  const view = await evaluate(tabId, '({ w: innerWidth, h: innerHeight })').catch(() => ({ w: 0, h: 0 }))
+  let pageShot = null
+  let pageRatio = 1
+  try {
+    // captureBeyondViewport only reaches past the fold when a clip is given, so
+    // ask for the whole document explicitly. A very tall page is left to the
+    // per-tile fallback, because Chrome caps a single capture.
+    const pageSize = await evaluate(tabId, '({ w: innerWidth, h: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) })').catch(() => null)
+    if (pageSize && pageSize.w > 0 && pageSize.h > 0 && pageSize.h <= 16000) {
+      const full = await send(tabId, 'Page.captureScreenshot', {
+        format: 'png',
+        captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width: pageSize.w, height: pageSize.h, scale: 1 },
+      })
+      if (full?.data) {
+        const dims = pngSize(full.data)
+        pageShot = full.data
+        pageRatio = dims.width > 0 ? dims.width / pageSize.w : 1
+      }
+    }
+  } catch {}
   const shots = []
   const tiles = []
-  for (const box of list) {
-    const data = await cropPng(full.data, box.x * ratio, box.y * ratio, box.width * ratio, box.height * ratio, zoom)
+  let blank = 0
+  for (let index = 0; index < list.length; index += 1) {
+    const box = list[index]
+    let data = null
+    if (pageShot) {
+      const pageX = (box.x + (scroll?.x ?? 0)) * pageRatio
+      const pageY = (box.y + (scroll?.y ?? 0)) * pageRatio
+      try {
+        data = await cropPng(pageShot, pageX, pageY, box.width * pageRatio, box.height * pageRatio, zoom)
+      } catch { data = null }
+    }
+    if (!data) {
+      // Fallback for a page too tall to capture in one shot. Use the page
+      // coordinates collected up front instead of re-querying by index: the DOM
+      // can change between collection and capture, and a shifted index produced
+      // 1x1 tiles from whatever element landed there.
+      const pageX = box.x + (scroll?.x ?? 0)
+      const pageY = box.y + (scroll?.y ?? 0)
+      await evaluate(tabId, `window.scrollTo(${pageX} - innerWidth / 2, ${pageY} - innerHeight / 2)`).catch(() => null)
+      await delay(160)
+      const nowScroll = await evaluate(tabId, '({ x: scrollX, y: scrollY })').catch(() => ({ x: 0, y: 0 }))
+      const full2 = await send(tabId, 'Page.captureScreenshot', { format: 'png' })
+      if (full2?.data) {
+        const dims2 = pngSize(full2.data)
+        const ratio2 = view && view.w > 0 && dims2.width > 0 ? dims2.width / view.w : 1
+        const vx = pageX - (nowScroll?.x ?? 0)
+        const vy = pageY - (nowScroll?.y ?? 0)
+        try {
+          data = await cropPng(full2.data, vx * ratio2, vy * ratio2, box.width * ratio2, box.height * ratio2, zoom)
+        } catch { data = null }
+      }
+    }
+    if (!data) { blank += 1; continue }
     shots.push({ data })
     tiles.push(await imageStats(data, 'image/png'))
   }
+  if (shots.length === 0) throw fail('NO_FRAME', 'no match could be captured')
   const cols = Math.min(Math.max(Number(columns) || Math.ceil(Math.sqrt(shots.length)), 1), 20)
   const png = await composeFilmstrip(shots.map((shot) => shot.data), cols, "image/png", { maxTiles: 144 })
   const size = await frameSize(shots[0].data, "image/png")
@@ -6259,6 +6356,7 @@ async function sheetPage({ selector, offset, limit, scale, columns, tabId: hint 
     selector: sel,
     offset: skip,
     count: shots.length,
+    blank: blank > 0 ? blank : undefined,
     columns: cols,
     tileWidth: size?.width ?? 0,
     tileHeight: size?.height ?? 0,

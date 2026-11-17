@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.1.288'
+export const VERSION = '1.1.295'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 /**
