@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 
 import { Bridge, translateFilePath } from '../bridge.js'
-import { detectLabel } from '../extension/identity.js'
+import { detectLabel } from '../extension/lib/identity.js'
 
 const PORT = 18791
 const TOKEN = 'a'.repeat(64)
@@ -221,9 +221,14 @@ try {
   // The worker is split into modules; guards read the concatenation so a
   // pattern is found wherever the function now lives.
   const workerFiles = [
-    'sw.js', 'constants.js', 'state.js', 'util.js', 'cdp.js', 'page.js', 'page-state.js',
-    'commands/tabs.js', 'commands/read.js', 'commands/input.js', 'commands/capture.js',
+    'sw.js',
+    'lib/constants.js', 'lib/state.js', 'lib/util.js', 'lib/cdp.js', 'lib/page.js', 'lib/page-state.js',
+    'commands/tabs.js', 'commands/read.js', 'commands/capture.js',
     'commands/observe.js', 'commands/feed.js', 'commands/wait.js',
+    'commands/input/shared.js', 'commands/input/click.js', 'commands/input/type.js',
+    'commands/input/key.js', 'commands/input/drag.js', 'commands/input/upload.js',
+    'commands/input/scroll.js', 'commands/input/paste.js', 'commands/input/set.js',
+    'commands/input/drive.js', 'commands/input/force.js',
   ]
   const workerSource = (await Promise.all(workerFiles.map((file) => readFile(new URL('../extension/' + file, import.meta.url), 'utf8')))).join('\n')
   const workerBody = (name) => {
@@ -906,7 +911,7 @@ try {
   // The bundle page's Connect button cannot reach the extension when dsh runs as
   // a desktop (Electron) app: that window has no chrome.runtime. The popup must
   // therefore carry its own pairing path, or a desktop user has no way at all.
-  const popupSource = await readFile(new URL('../extension/popup.js', import.meta.url), 'utf8')
+  const popupSource = await readFile(new URL('../extension/popup/popup.js', import.meta.url), 'utf8')
   const popupHtml = await readFile(new URL('../extension/popup.html', import.meta.url), 'utf8')
   // Internal pages cannot be driven (CDP refuses chrome://), so opening one is a
   // separate tab-strip-only path that must never adopt the tab.
@@ -1106,7 +1111,7 @@ try {
     assert.ok(!/bb-shake/.test(endpointBar), 'the endpoint dot shakes again')
     assert.ok(/bb-pulse/.test(endpointBar), 'the endpoint dot stopped pulsing while busy')
   }
-  const discovery = await readFile(new URL('../extension/discovery.js', import.meta.url), 'utf8')
+  const discovery = await readFile(new URL('../extension/lib/discovery.js', import.meta.url), 'utf8')
   assert.ok(/8791 \+ index|8791, 8792/.test(discovery), 'extension discovery no longer sweeps the default window')
   assert.ok(/pairWithUrl/.test(popupSource), 'the popup lost the pasted pairing URL path')
   // The unslop pass: grid rhythm, weight, one data size, a flat lamp ring, and

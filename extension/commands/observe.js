@@ -1,10 +1,10 @@
-// Browser Bridge worker: observe.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
-import { evaluateProgram, frameList, guardedContext, pageMeta, rawSend, resolveFrameArg, send } from '../cdp.js'
-import { NET_BODY_CHARS, NET_HEADER_CHARS, NET_HEADER_MAX } from '../constants.js'
-import { shared } from '../state.js'
+// Browser Bridge worker: commands/observe.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 import { requirePage } from './tabs.js'
-import { fail } from '../util.js'
+import { evaluateProgram, frameList, guardedContext, pageMeta, rawSend, resolveFrameArg, send } from '../lib/cdp.js'
+import { NET_BODY_CHARS, NET_HEADER_CHARS, NET_HEADER_MAX } from '../lib/constants.js'
+import { shared } from '../lib/state.js'
+import { fail } from '../lib/util.js'
 
 export const netCapture = (tabId) => shared.netCaptures.get(tabId)
 

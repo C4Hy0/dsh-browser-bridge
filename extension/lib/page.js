@@ -1,5 +1,5 @@
-// Browser Bridge worker: page.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
+// Browser Bridge worker: lib/page.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 
 export function snapshotPage(maxChars, maxElements, normalize) {
   const rawSource = (document.body ? document.body.innerText : '') || ''

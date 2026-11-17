@@ -1,18 +1,27 @@
 // Browser Bridge worker entry: listeners, keepalive, dispatcher.
-// The command handlers live in ./commands/; shared state in ./state.js.
-import { discoverEndpoints } from './discovery.js'
-import { whoami } from './identity.js'
+// The command handlers live in ./commands/; shared state in ./lib/state.js.
+import { discoverEndpoints } from './lib/discovery.js'
+import { whoami } from './lib/identity.js'
 import { imageSource, pixelsPage, recordPage, screencastFrame, screenshotPage, sheetPage } from './commands/capture.js'
-import { rawSend } from './cdp.js'
-import { KEEPALIVE_ALARM, WAIT_MS } from './constants.js'
 import { feedPage } from './commands/feed.js'
-import { clickPage, dragPage, drivePage, dropPage, forcePage, hoverPage, keyPage, measurePage, pastePage, releasePage, scrollPage, selectOption, setControl, typePage, uploadPage, wheelPage } from './commands/input.js'
+import { clickPage, hoverPage } from './commands/input/click.js'
+import { dragPage, dropPage } from './commands/input/drag.js'
+import { drivePage, measurePage } from './commands/input/drive.js'
+import { forcePage, releasePage } from './commands/input/force.js'
+import { keyPage } from './commands/input/key.js'
+import { pastePage } from './commands/input/paste.js'
+import { scrollPage, wheelPage } from './commands/input/scroll.js'
+import { selectOption, setControl } from './commands/input/set.js'
+import { typePage } from './commands/input/type.js'
+import { uploadPage } from './commands/input/upload.js'
 import { consoleArg, consolePage, consolePush, netCapture, netOnFinished, netOnRequest, netOnResponse, networkPage, timelinePage } from './commands/observe.js'
 import { evalInstall, evalList, evalPage, evalRemove, framesPage, inspectPage, readHtml, readPage } from './commands/read.js'
-import { shared } from './state.js'
 import { closePage, closeTab, listTabs, openExtensionPage, openPage, openUrl, useExistingTab } from './commands/tabs.js'
-import { delay, fail } from './util.js'
 import { waitForPage } from './commands/wait.js'
+import { rawSend } from './lib/cdp.js'
+import { KEEPALIVE_ALARM, WAIT_MS } from './lib/constants.js'
+import { shared } from './lib/state.js'
+import { delay, fail } from './lib/util.js'
 
 const getEndpoint = async () => {
   const { endpoint } = await chrome.storage.local.get('endpoint')

@@ -122,30 +122,44 @@ Parameters and result shapes live in the tool schemas and the worker handlers.
   polling after the worker is suspended.
 - The popup holds the pairing field and the server list.
 
-The worker is an ES module (`"type": "module"`), split by domain. The entry
-`sw.js` holds the listeners, the keepalive loop and the dispatcher; the rest is
-imported:
+The worker is an ES module (`"type": "module"`), split by domain. The extension
+root keeps `manifest.json`, `popup.html` and the entry `sw.js`; everything else
+is grouped:
 
 | File | Contents |
 |---|---|
-| `constants.js` | timers, caps, hint strings, key tables, the read-only prelude |
-| `state.js` | one `shared` object for mutable state (attached, recorder, captures, nav outcomes) and `heldReady` |
-| `util.js` | fail, delay, clamp, image and key helpers, `resolveTarget`, recent-dialog helpers |
-| `cdp.js` | `rawSend`, attach, `send`, `evaluate`, frame resolution, `forceActive`, eval recovery |
-| `page.js` | page functions serialized with `.toString()` and the expression builders. No imports: a serialized function must not close over module scope |
-| `page-state.js` | `pageState`, `documentHint`, navigation outcomes, visibility |
+| `sw.js` | entry: listeners, keepalive loop, dispatcher |
+| `lib/constants.js` | timers, caps, hint strings, key tables, the read-only prelude |
+| `lib/state.js` | one `shared` object for mutable state (attached, recorder, captures, nav outcomes) and `heldReady` |
+| `lib/util.js` | fail, delay, clamp, image and key helpers, `resolveTarget`, recent-dialog helpers |
+| `lib/cdp.js` | `rawSend`, attach, `send`, `evaluate`, frame resolution, `forceActive`, eval recovery |
+| `lib/page.js` | page functions serialized with `.toString()` and the expression builders. No imports: a serialized function must not close over module scope |
+| `lib/page-state.js` | `pageState`, `documentHint`, navigation outcomes, visibility |
+| `lib/discovery.js` | port probing for the connect flow |
+| `lib/identity.js` | the stable browser id and label |
 | `commands/tabs.js` | open, list, use, close, `requirePage` |
 | `commands/read.js` | read, inspect, html, frames, eval install/remove/list |
-| `commands/input.js` | click, type, key, hover, drag, drop, scroll, wheel, upload, paste, set, select, drive, measure, force |
 | `commands/capture.js` | shot, record, sheet, pixels, imageSource, metrics |
 | `commands/observe.js` | network, console, timeline |
 | `commands/feed.js` | feed page and merge |
 | `commands/wait.js` | waitFor core, network test, follow-up click |
+| `commands/input/shared.js` | points, presses, visibility and editable-target checks, typing helpers |
+| `commands/input/click.js` | click, hover |
+| `commands/input/type.js` | type |
+| `commands/input/key.js` | key, key-text verification |
+| `commands/input/drag.js` | drag, drop |
+| `commands/input/upload.js` | upload, file-chooser fallback, 0-byte check |
+| `commands/input/scroll.js` | scroll, wheel |
+| `commands/input/paste.js` | paste, clipboard write |
+| `commands/input/set.js` | select, set |
+| `commands/input/drive.js` | drive, measure |
+| `commands/input/force.js` | forceActive and releaseActive wrappers |
+| `popup/popup.js` | the popup script, loaded by `popup.html` |
 
 Shared state is one object because an ES module `let` cannot be reassigned
 across modules. The six functions that are serialized into the page
 (`snapshotPage`, `boxOf`, `mapAreaAt`, `resolveRedirectHref`, `feedCollect`,
-`feedScroll`) live in `page.js`, which imports nothing. The tests read the
+`feedScroll`) live in `lib/page.js`, which imports nothing. The tests read the
 concatenation of the module files, so a guard finds a function wherever it
 lives.
 
@@ -265,7 +279,10 @@ bridge.js         transport: token, queues, long poll
 tools.js          ten bsb_* tool definitions
 http-adapter.js   Node handler adapter for the web routes
 client.js         plugin page cards
-extension/        MV3 worker, popup, discovery, identity
+extension/        MV3 manifest, popup.html and the worker entry sw.js
+extension/lib/    worker infrastructure (state, cdp, page functions, discovery)
+extension/commands/  command domains, with input/ split by action
+extension/popup/  the popup script
 scripts/          zip packer and the extension public key
 skill/            bundled browser-bridge playbook
 docs/images/      screenshots used by the README

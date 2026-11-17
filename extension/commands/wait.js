@@ -1,11 +1,11 @@
-// Browser Bridge worker: wait.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
-import { evaluateInContext, guardedContext } from '../cdp.js'
-import { clickPage } from './input.js'
-import { documentHint, navOutcome } from '../page-state.js'
-import { shared } from '../state.js'
+// Browser Bridge worker: commands/wait.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
+import { clickPage } from './input/click.js'
 import { requirePage } from './tabs.js'
-import { delay, fail, recentDialog } from '../util.js'
+import { evaluateInContext, guardedContext } from '../lib/cdp.js'
+import { documentHint, navOutcome } from '../lib/page-state.js'
+import { shared } from '../lib/state.js'
+import { delay, fail, recentDialog } from '../lib/util.js'
 
 /**
  * Block until a page condition holds instead of sleeping a fixed time.

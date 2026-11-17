@@ -1,9 +1,9 @@
-// Browser Bridge worker: tabs.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
-import { attach, attachTab, detach, pageMeta, readVisibility, scheduleDetach, send, waitEvent, waitReady, windowInfo } from '../cdp.js'
-import { documentHint, navOutcome, pageState, rememberNav } from '../page-state.js'
-import { shared } from '../state.js'
-import { delay, fail, isInternalUrl } from '../util.js'
+// Browser Bridge worker: commands/tabs.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
+import { attach, attachTab, detach, pageMeta, readVisibility, scheduleDetach, send, waitEvent, waitReady, windowInfo } from '../lib/cdp.js'
+import { documentHint, navOutcome, pageState, rememberNav } from '../lib/page-state.js'
+import { shared } from '../lib/state.js'
+import { delay, fail, isInternalUrl } from '../lib/util.js'
 
 /** The tab this browser is driving, if any. */
 export const getTrackedId = async () => {

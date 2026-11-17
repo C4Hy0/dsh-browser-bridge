@@ -1,12 +1,12 @@
-// Browser Bridge worker: feed.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
-import { evaluate, forceActive, pageMeta, releaseActive } from '../cdp.js'
-import { FEED_HIDDEN_HINT, FEED_UNKEYED_HINT } from '../constants.js'
-import { feedCollect, feedScroll } from '../page.js'
-import { pageVisibility } from '../page-state.js'
-import { shared } from '../state.js'
+// Browser Bridge worker: commands/feed.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 import { requirePage } from './tabs.js'
-import { delay, fail } from '../util.js'
+import { evaluate, forceActive, pageMeta, releaseActive } from '../lib/cdp.js'
+import { FEED_HIDDEN_HINT, FEED_UNKEYED_HINT } from '../lib/constants.js'
+import { feedCollect, feedScroll } from '../lib/page.js'
+import { pageVisibility } from '../lib/page-state.js'
+import { shared } from '../lib/state.js'
+import { delay, fail } from '../lib/util.js'
 
 /**
  * Fold one DOM read into the feed collection.

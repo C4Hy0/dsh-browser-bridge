@@ -1,5 +1,5 @@
-// Browser Bridge worker: page-state.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
+// Browser Bridge worker: lib/page-state.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 import { evaluate } from './cdp.js'
 import { NAV_OUTCOME_MAX } from './constants.js'
 import { shared } from './state.js'

@@ -1,5 +1,5 @@
-// Browser Bridge worker: cdp.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
+// Browser Bridge worker: lib/cdp.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 import { DETACH_IDLE_MS, FORCE_ACTIVE_NOTE, FORCE_HOLD_NOTE, HELD_KEY, READ_ONLY_PRELUDE } from './constants.js'
 import { shared } from './state.js'
 import { delay, fail } from './util.js'

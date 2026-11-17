@@ -1,5 +1,5 @@
-// Browser Bridge worker: util.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
+// Browser Bridge worker: lib/util.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 import { KEY_TEXT_PREFIX_CHARS } from './constants.js'
 import { shared } from './state.js'
 
@@ -267,48 +267,6 @@ export function chordPlan(specs, baseMask = 0) {
   // Stable sort: modifiers go down before the key they modify.
   plan.sort((a, b) => (modifierBitOf(b.spec) ? 1 : 0) - (modifierBitOf(a.spec) ? 1 : 0))
   return { plan, mask: chordMask }
-}
-
-/** Attach the sprite's velocity (game units/s) to a measurement. */
-export const withVelocity = (tabId, measurement) => {
-  // Continuity: a scene can hold several bright-neutral sprites (the player, the
-  // traffic art cars). Sticking to the component closest to the pose seen on the
-  // previous tick stops the controller from chasing a passing car.
-  if (measurement && measurement.car) {
-    const prev = shared.lastCarPose.get(tabId)
-    if (prev && Date.now() - prev.t < 3000) {
-      const all = [measurement.car, ...(measurement.others || [])]
-      // Shape/colour gate: a traffic sprite can sit nearer than the player one
-      // tick, so only candidates matching the previous sprite's brightness and
-      // pixel area are eligible for the continuity re-pick.
-      const near = (p) => {
-        if (prev.b != null && p.b != null && Math.abs(p.b - prev.b) > 22) return false
-        if (prev.n && p.n && (p.n > prev.n * 1.7 || p.n < prev.n * 0.55)) return false
-        return true
-      }
-      let best = null, bestD = Infinity
-      for (const p of all) {
-        if (!near(p)) continue
-        const d = Math.hypot(p.cx - prev.cx, p.cy - prev.cy)
-        if (d < bestD) { bestD = d; best = p }
-      }
-      if (best && bestD <= 120 && best !== measurement.car) {
-        measurement.car = best
-        measurement.others = all.filter((p) => p !== best).slice(0, 4)
-      }
-    }
-  }
-  const car = measurement && measurement.car
-  if (!car) return measurement
-  const now = Date.now()
-  const prev = shared.lastCarPose.get(tabId)
-  if (prev && now > prev.t && now - prev.t < 4000 && (prev.b == null || car.b == null || Math.abs(car.b - prev.b) <= 26)) {
-    const dt = (now - prev.t) / 1000
-    car.vx = Math.round(((car.cx - prev.cx) / dt) * 10) / 10
-    car.vy = Math.round(((car.cy - prev.cy) / dt) * 10) / 10
-  }
-  shared.lastCarPose.set(tabId, { cx: car.cx, cy: car.cy, t: now, b: car.b, n: car.n })
-  return measurement
 }
 
 /** Name the page in a refusal, so the caller knows which tab it was. */

@@ -1,11 +1,11 @@
-// Browser Bridge worker: read.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
-import { evalUnavailable, evaluate, evaluateInContext, evaluateProgram, frameContext, frameList, guardedContext, pageMeta, resolveFrameArg, send } from '../cdp.js'
-import { resolveRedirectHref, snapshotPage } from '../page.js'
-import { documentHint, navOutcome, pageState, rememberNav } from '../page-state.js'
-import { shared } from '../state.js'
+// Browser Bridge worker: commands/read.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 import { requirePage } from './tabs.js'
-import { documentIsFailed, documentIsHealthy, fail, isInternalUrl, recentDialog, stateSummary } from '../util.js'
+import { evalUnavailable, evaluate, evaluateInContext, evaluateProgram, frameContext, frameList, guardedContext, pageMeta, resolveFrameArg, send } from '../lib/cdp.js'
+import { resolveRedirectHref, snapshotPage } from '../lib/page.js'
+import { documentHint, navOutcome, pageState, rememberNav } from '../lib/page-state.js'
+import { shared } from '../lib/state.js'
+import { documentIsFailed, documentIsHealthy, fail, isInternalUrl, recentDialog, stateSummary } from '../lib/util.js'
 
 /** Register a script that runs before any page script in every new document. */
 export async function evalInstall({ expression, tabId: hint }) {

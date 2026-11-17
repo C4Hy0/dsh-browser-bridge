@@ -1,12 +1,12 @@
-// Browser Bridge worker: capture.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
-import { evaluate, evaluateInContext, frameContext, frameOrigin, pageMeta, rawSend, send, windowInfo } from '../cdp.js'
-import { clickPage } from './input.js'
-import { deepFindExpr } from '../page.js'
-import { pageVisibility } from '../page-state.js'
-import { shared } from '../state.js'
+// Browser Bridge worker: commands/capture.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
+import { clickPage } from './input/click.js'
 import { requirePage } from './tabs.js'
-import { clampInt, composeFilmstrip, cropPng, delay, fail, frameSignature, frameSize, imageStats, pngSize, preprocessPng, signatureDistance } from '../util.js'
+import { evaluate, evaluateInContext, frameContext, frameOrigin, pageMeta, rawSend, send, windowInfo } from '../lib/cdp.js'
+import { deepFindExpr } from '../lib/page.js'
+import { pageVisibility } from '../lib/page-state.js'
+import { shared } from '../lib/state.js'
+import { clampInt, composeFilmstrip, cropPng, delay, fail, frameSignature, frameSize, imageStats, pngSize, preprocessPng, signatureDistance } from '../lib/util.js'
 
 /**
  * Measure the capture target once so a burst can reuse it.

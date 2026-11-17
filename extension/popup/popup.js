@@ -11,7 +11,7 @@
  * makes exactly one call, to `/state`.
  */
 
-import { whoami } from './identity.js'
+import { whoami } from '../lib/identity.js'
 
 const $ = (id) => document.getElementById(id)
 

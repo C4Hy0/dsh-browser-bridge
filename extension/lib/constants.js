@@ -1,5 +1,5 @@
-// Browser Bridge worker: constants.
-// Split from extension/sw.js; keep the module boundaries in docs/SPEC.md in sync.
+// Browser Bridge worker: lib/constants.js.
+// Keep the module boundaries in docs/SPEC.md in sync.
 
 export const WAIT_MS = 20000
 
