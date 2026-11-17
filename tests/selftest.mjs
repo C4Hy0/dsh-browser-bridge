@@ -218,7 +218,20 @@ try {
   // The host and the extension must agree on command names; a typo here shows up
   // as "unknown method" only when a real browser runs the command.
   const toolsSource = await readFile(new URL('../tools.js', import.meta.url), 'utf8')
-  const workerSource = await readFile(new URL('../extension/sw.js', import.meta.url), 'utf8')
+  // The worker is split into modules; guards read the concatenation so a
+  // pattern is found wherever the function now lives.
+  const workerFiles = [
+    'sw.js', 'constants.js', 'state.js', 'util.js', 'cdp.js', 'page.js', 'page-state.js',
+    'commands/tabs.js', 'commands/read.js', 'commands/input.js', 'commands/capture.js',
+    'commands/observe.js', 'commands/feed.js', 'commands/wait.js',
+  ]
+  const workerSource = (await Promise.all(workerFiles.map((file) => readFile(new URL('../extension/' + file, import.meta.url), 'utf8')))).join('\n')
+  const workerBody = (name) => {
+    const at = workerSource.indexOf('function ' + name + '(')
+    if (at < 0) return ''
+    const end = workerSource.indexOf('\n}', at)
+    return workerSource.slice(at, end + 2)
+  }
   const bridgeSource = await readFile(new URL('../bridge.js', import.meta.url), 'utf8')
   const sent = new Set([...toolsSource.matchAll(/bridge\.send\(\s*'([a-zA-Z]+)'/g)].map((match) => match[1]))
   const handled = new Set([...workerSource.matchAll(/case '([a-zA-Z]+)':\s*return/g)].map((match) => match[1]))
@@ -290,11 +303,11 @@ try {
   // Vue instance, which the isolated world cannot see).
   assert.ok(/const READ_ONLY_PRELUDE =/.test(workerSource), 'extension/sw.js has no read-only guard prelude')
   assert.ok(/async function guardedContext\(/.test(workerSource), 'extension/sw.js has no guarded context helper')
-  const evalBody = workerSource.slice(workerSource.indexOf('async function evalPage'), workerSource.indexOf('async function evaluateProgram'))
+  const evalBody = workerBody('evalPage')
   assert.ok(/guardedContext\(tabId/.test(evalBody), 'evalPage does not evaluate inside the guarded world')
   assert.ok(/useMain/.test(evalBody), 'evalPage has no opt-in main-world branch')
   assert.ok(/String\(world \|\| 'isolated'\) === 'main'/.test(evalBody), 'evalPage main world is not opt-in via world:"main"')
-  const waitBody = workerSource.slice(workerSource.indexOf('async function waitForCore'), workerSource.indexOf('/** Resolve the optional click a wait fires'))
+  const waitBody = workerBody('waitForCore')
   assert.ok(/evaluateInContext\(tabId, probeContext, probe\)/.test(waitBody), 'waitForCore does not probe inside the guarded world')
   assert.ok(!/state = await evaluate\(tabId, probe\)/.test(waitBody), 'waitForCore still probes the main world')
   assert.ok(/enum: \['isolated', 'main'\]/.test(toolsSource), 'bsb_eval does not advertise the opt-in main world')
@@ -366,7 +379,7 @@ try {
   // document that is actually failed. A document still parsing must not be
   // judged as an interstitial, because 0 chars/0 elements is its normal state.
   {
-    const hintBody = workerSource.slice(workerSource.indexOf('function documentHint'), workerSource.indexOf('// Page functions'))
+    const hintBody = workerBody('documentHint')
     assert.ok(/function documentIsHealthy\(state, requestedUrl\)/.test(workerSource), 'sw.js lost the healthy-document test')
     assert.ok(/function documentIsFailed\(state\)/.test(workerSource), 'sw.js lost the failed-document test')
     assert.ok(/documentIsHealthy\(state, requestedUrl\)/.test(hintBody), 'documentHint reports a cached failure against a healthy document')
@@ -377,7 +390,7 @@ try {
     const rememberBody = workerSource.slice(workerSource.indexOf('function rememberNav'), workerSource.indexOf('const navOutcome = (tabId)'))
     assert.ok(!/\.\.\.previous/.test(rememberBody), 'rememberNav merges the previous navigation outcome forward again')
     assert.ok(/navOutcomes\.set\(tabId, \{/.test(rememberBody), 'rememberNav no longer stores a per-tab outcome')
-    const readBody = workerSource.slice(workerSource.indexOf('async function readPage'), workerSource.indexOf('const resolveTarget'))
+    const readBody = workerBody('readPage')
     assert.ok(/documentIsHealthy\(state, outcome\.requestedUrl\)/.test(readBody), 'readPage no longer clears a stale cached navigation error')
     assert.ok(/documentIsFailed\(state\)/.test(readBody), 'readPage passes a cached navigationError without checking the current document')
     assert.ok(/navigationError: currentFailed \? outcome\?\.navigationError : undefined/.test(readBody), 'readPage forwards the cached error even when the document is healthy')
@@ -397,9 +410,9 @@ try {
     assert.ok(/tabId,/.test(evalBody) && /visibility: String\(probe\.visibility/.test(evalBody), 'evalPage does not echo tabId/visibility')
     assert.ok(/world: useMain \? 'main' : 'isolated'/.test(evalBody), 'evalPage no longer echoes the world that answered')
     assert.ok(/frame && useMain/.test(evalBody) && /UNSUPPORTED/.test(evalBody), 'evalPage silently answers a frame-targeted main-world eval from the top frame')
-    const programBody = workerSource.slice(workerSource.indexOf('async function evaluateProgram'), workerSource.indexOf('async function sheetPage'))
+    const programBody = workerBody('evaluateProgram')
     assert.ok(/typeof remote\.type !== 'string'/.test(programBody), 'evaluateProgram still collapses "no evaluation result" into undefined')
-    const guardedBody = workerSource.slice(workerSource.indexOf('async function guardedContext'), workerSource.indexOf('async function timelinePage'))
+    const guardedBody = workerBody('guardedContext')
     assert.ok(/installed\?\.exceptionDetails/.test(guardedBody), 'guardedContext ignores a failed read-only prelude install')
     assert.ok(/READ_ONLY_PRELUDE/.test(guardedBody), 'guardedContext no longer installs the read-only prelude')
     const evalTools = toolsSource.slice(toolsSource.indexOf("name: 'bsb_eval'"), toolsSource.indexOf("name: 'bsb_open'"))
@@ -419,8 +432,8 @@ try {
   // link, cut text without a marker and read a canvas app as an empty page; text
   // mode returned an anti-scrape timestamp as a column of one-character lines.
   {
-    const inspectBody = workerSource.slice(workerSource.indexOf('async function inspectPage'), workerSource.indexOf('async function networkPage'))
-    const snapshotBody = workerSource.slice(workerSource.indexOf('function snapshotPage'), workerSource.indexOf('function deepFindExpr'))
+    const inspectBody = workerBody('inspectPage')
+    const snapshotBody = workerBody('snapshotPage')
     assert.ok(/typeof el\.innerText === 'string'/.test(inspectBody), 'rows text still falls back past innerText')
     assert.ok(!/\.textContent/.test(inspectBody), 'rows text reads textContent again')
     assert.ok(/rec\.textTruncated = true/.test(inspectBody), 'a cut row text is unmarked again')
@@ -449,10 +462,9 @@ try {
   // two that read a page get a small stub DOM instead of a browser.
   {
     const sourceOf = (name) => {
-      const start = workerSource.indexOf('function ' + name + '(')
-      assert.ok(start >= 0, 'extension/sw.js lost ' + name)
-      const stop = workerSource.slice(start + 1).search(/\n(?:async )?function |\nconst |\n\/\*\*/)
-      return workerSource.slice(start, stop > 0 ? start + 1 + stop : workerSource.length)
+      const body = workerBody(name)
+      assert.ok(body.length > 0, 'extension/sw.js lost ' + name)
+      return body
     }
     const resolverSrc = sourceOf('resolveRedirectHref')
     const collectSrc = sourceOf('feedCollect')
@@ -684,10 +696,9 @@ try {
   // before dispatching, and a successful action must say where it was applied.
   {
     const bodyOf = (name) => {
-      const start = workerSource.indexOf('async function ' + name + '(')
-      assert.ok(start > 0, 'extension/sw.js lost ' + name)
-      const next = workerSource.indexOf('\nasync function ', start + 1)
-      return workerSource.slice(start, next > start ? next : workerSource.length)
+      const body = workerBody(name)
+      assert.ok(body.length > 0, 'extension/sw.js lost ' + name)
+      return body
     }
     for (const name of ['clickPage', 'hoverPage', 'keyPage', 'typePage', 'dragPage', 'dropPage', 'wheelPage']) {
       assert.ok(
@@ -817,7 +828,7 @@ try {
   // error page, and a wait burned its full timeout on a tab that could never
   // load. The fix is one outcome shape (requested vs document URL, HTTP status,
   // net error) plus a per-tab cache, carried by every navigation-reporting tool.
-  assert.ok(/const navOutcomes = new Map\(\)/.test(workerSource), 'worker lost its per-tab navigation outcome cache')
+  assert.ok(/navOutcomes: new Map\(\)/.test(workerSource), 'worker lost its per-tab navigation outcome cache')
   assert.ok(/function rememberNav\(tabId, outcome\)/.test(workerSource), 'navigation outcomes are no longer remembered')
   assert.ok(/const navOutcome = \(tabId\) =>/.test(workerSource), 'navigation outcomes are no longer readable per tab')
   assert.ok(/const isInternalUrl = \(url\) =>/.test(workerSource), 'worker no longer recognises browser-internal pages')
@@ -899,7 +910,7 @@ try {
   const popupHtml = await readFile(new URL('../extension/popup.html', import.meta.url), 'utf8')
   // Internal pages cannot be driven (CDP refuses chrome://), so opening one is a
   // separate tab-strip-only path that must never adopt the tab.
-  const sw = await readFile(new URL('../extension/sw.js', import.meta.url), 'utf8')
+  const sw = workerSource
   assert.ok(/case 'openUrl'/.test(sw), 'the worker lost its internal-URL opener')
   // Smooth-scrolling sites broke every element-targeted press: scrollIntoView
   // animates, the rect beside it is stale, and the click lands offscreen as a
@@ -1151,10 +1162,10 @@ try {
   // one explicitly, it runs in every new document, and it is page code by
   // design. It is allowed only inside evalInstall/evalRemove, never on attach.
   const INJECTION = ['addScriptToEvaluateOnNewDocument', 'removeScriptToEvaluateOnNewDocument']
-  const injectStart = workerSource.indexOf('async function evalInstall')
-  const injectEnd = workerSource.indexOf('async function execute(')
-  assert.ok(injectStart > 0 && injectEnd > injectStart, 'the document-start escape hatch is gone')
-  const outsideInjection = workerSource.slice(0, injectStart) + workerSource.slice(injectEnd)
+  const injectBodies = workerBody('evalInstall') + workerBody('evalRemove')
+  assert.ok(injectBodies.length > 0, 'the document-start escape hatch is gone')
+  let outsideInjection = workerSource
+  for (const name of ['evalInstall', 'evalRemove']) outsideInjection = outsideInjection.replace(workerBody(name), '')
   const escapedInjection = INJECTION.filter((needle) => outsideInjection.includes(needle))
   assert.deepEqual(escapedInjection, [], `document-start calls escaped their hatch: ${escapedInjection.join(', ')}`)
   const GATED = ['setFocusEmulationEnabled', 'setWebLifecycleState']
@@ -1357,7 +1368,7 @@ try {
     assert.ok(/badSelector/.test(workerSource) && /BAD_SELECTOR/.test(workerSource), 'a malformed timeline selector is still reported as no data')
     assert.ok(/samplesCollected/.test(workerSource) && /observedMs/.test(workerSource), 'timeline no longer reports the collected count and observed window')
     assert.ok(/showing \$\{shown\} of \$\{samples\.length\}/.test(toolsSource), 'the timeline renderer still hides its truncation')
-    assert.ok(/recording: recorder\.done !== true/.test(workerSource) && /lastRecording/.test(workerSource), 'record status still reports a finished recording as live')
+    assert.ok(/recording: shared\.recorder\.done !== true/.test(workerSource) && /lastRecording/.test(workerSource), 'record status still reports a finished recording as live')
     assert.ok(/capture\(record\) \$\{state\}/.test(toolsSource), 'the record status line still omits liveness')
     assert.ok(/captureBeyondViewport: true/.test(workerSource) && /blank: blank > 0/.test(workerSource), 'sheet still crops black tiles for offscreen matches')
     assert.ok(/assertFilesReadable/.test(workerSource) && /FILE_NOT_READABLE/.test(workerSource), 'upload still accepts a 0-byte attachment')

@@ -122,6 +122,33 @@ Parameters and result shapes live in the tool schemas and the worker handlers.
   polling after the worker is suspended.
 - The popup holds the pairing field and the server list.
 
+The worker is an ES module (`"type": "module"`), split by domain. The entry
+`sw.js` holds the listeners, the keepalive loop and the dispatcher; the rest is
+imported:
+
+| File | Contents |
+|---|---|
+| `constants.js` | timers, caps, hint strings, key tables, the read-only prelude |
+| `state.js` | one `shared` object for mutable state (attached, recorder, captures, nav outcomes) and `heldReady` |
+| `util.js` | fail, delay, clamp, image and key helpers, `resolveTarget`, recent-dialog helpers |
+| `cdp.js` | `rawSend`, attach, `send`, `evaluate`, frame resolution, `forceActive`, eval recovery |
+| `page.js` | page functions serialized with `.toString()` and the expression builders. No imports: a serialized function must not close over module scope |
+| `page-state.js` | `pageState`, `documentHint`, navigation outcomes, visibility |
+| `commands/tabs.js` | open, list, use, close, `requirePage` |
+| `commands/read.js` | read, inspect, html, frames, eval install/remove/list |
+| `commands/input.js` | click, type, key, hover, drag, drop, scroll, wheel, upload, paste, set, select, drive, measure, force |
+| `commands/capture.js` | shot, record, sheet, pixels, imageSource, metrics |
+| `commands/observe.js` | network, console, timeline |
+| `commands/feed.js` | feed page and merge |
+| `commands/wait.js` | waitFor core, network test, follow-up click |
+
+Shared state is one object because an ES module `let` cannot be reassigned
+across modules. The six functions that are serialized into the page
+(`snapshotPage`, `boxOf`, `mapAreaAt`, `resolveRedirectHref`, `feedCollect`,
+`feedScroll`) live in `page.js`, which imports nothing. The tests read the
+concatenation of the module files, so a guard finds a function wherever it
+lives.
+
 ## 9. Packaging
 
 `extension/` is the source. `dist/` is generated on download: the host packs
