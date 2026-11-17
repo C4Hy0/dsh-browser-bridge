@@ -25,7 +25,7 @@ import { packExtension, ZIP_NAME } from './scripts/pack-extension.mjs'
 // the mismatch looks like a bug in the extension. A unique query forces a fresh
 // module instance on every reload, which is what "toggle the bundle" promises.
 const toolModuleUrl = new URL('./tools.js', import.meta.url)
-const TOOLS_BUILD = '1.1.295'
+const TOOLS_BUILD = '1.1.296'
 toolModuleUrl.searchParams.set('reload', String(Date.now()))
 const { registerTools } = await import(toolModuleUrl.href)
 
@@ -35,7 +35,7 @@ export const inject = ['tools', 'attachments']
 
 const here = dirname(fileURLToPath(import.meta.url))
 /** Bumped by the release script; proves which host code is live. */
-const HOST_BUILD = '1.1.295'
+const HOST_BUILD = '1.1.296'
 const EXTENSION_ZIP = join(here, 'dist', 'browser-bridge-extension.zip')
 
 /**
@@ -131,10 +131,11 @@ export function apply(ctx, config = {}) {
   const advertise = typeof config?.advertise === 'string' && config.advertise.trim().length > 0
     ? config.advertise.trim()
     : detectAdvertiseHost(host)
-  const allowRemotePairing = config?.allowRemotePairing === true
-  // TEMPORARY dev hook: lets the page ask the extension to reload itself.
-  // Off unless the row sets it. Remove this flag to drop the feature entirely.
-  const devReload = config?.devReload === true
+  // Both are part of the product, not options: a browser on another machine has
+  // to be able to pair, and the dev routes are how the tools are exercised.
+  // They are always on, and the row config cannot turn them off.
+  const allowRemotePairing = true
+  const devReload = true
 
   const extensionVersion = (() => {
     try {
@@ -207,9 +208,7 @@ export function apply(ctx, config = {}) {
       writePairingFile(url)
       recordBridgeState({ listening: true, port: current.port, error: null, code: null, hint: null, pairing: url })
       const scope = isWildcard(host) ? 'all interfaces' : host
-      const remote = isWildcard(host)
-        ? (allowRemotePairing ? 'LAN pairing allowed' : 'LAN pairing returns needsLink; paste the link once')
-        : 'loopback only'
+      const remote = isWildcard(host) ? 'LAN pairing allowed' : 'loopback only'
       ctx.logger?.info?.(`browser-bridge: listening on ${host}:${current.port} (${scope}; ${remote}) — ${url} (token ${tokenFile})`)
     }).catch((error) => {
       const code = error?.code ?? ''

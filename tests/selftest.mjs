@@ -1371,6 +1371,21 @@ try {
     console.log('ok  evening-batch guards pinned (timeline, record status, sheet tiles, upload size, frame probe)')
   }
 
+  // Fixed product options and the docs layout.
+  {
+    const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8')
+    assert.ok(/const allowRemotePairing = true/.test(indexSource), 'LAN pairing is configurable again')
+    assert.ok(/const devReload = true/.test(indexSource), 'the dev routes are configurable again')
+    assert.ok(!/Reload extension/.test(clientSource), 'the plugin page still has a reload button')
+    assert.ok(!/chrome\.runtime\.sendMessage\([^)]*type: 'reload'/.test(clientSource), 'the plugin page still asks the extension to reload')
+    assert.ok(existsSync(new URL('../docs/images', import.meta.url)), 'images/ is not under docs/')
+    assert.ok(!existsSync(new URL('../images', import.meta.url)), 'a top-level images/ directory still exists')
+    assert.ok(!existsSync(new URL('../design', import.meta.url)), 'design/ still exists')
+    const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    assert.ok(!/allowRemotePairing|devReload/.test(patch), 'cordis.patch.yml still carries the fixed options')
+    console.log('ok  fixed options, plugin page and docs layout pinned')
+  }
+
   // Guards from the CaptchaWare run. Each of these was a silent failure or a
   // missing primitive that cost a workaround, so pin the contract: wheel input,
   // key-driven text, cross-origin frame reads, non-editable type targets,

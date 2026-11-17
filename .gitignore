@@ -7,7 +7,6 @@ node_modules/
 .mnemon/
 .agents/
 friction/
-design/
 docs/FRICTION.md
 docs/PLAN.md
 docs/ui/

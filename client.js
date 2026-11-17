@@ -211,23 +211,12 @@ window.__ModuleLoader__.load({
       const [meta, setMeta] = React.useState(null)
       React.useEffect(() => {
         let alive = true
-        let seen = localStorage.getItem('browser-bridge.version') ?? ''
         const tick = async () => {
           try {
             const response = await fetch('/browser-bridge/extension-meta.json', { cache: 'no-store' })
             if (!response.ok) return
             const value = await response.json()
-            if (!alive) return
-            setMeta(value)
-            // New build on the server: ask the extension to re-read its folder.
-            if (value?.devReload && value.version && seen && value.version !== seen) {
-              localStorage.setItem('browser-bridge.version', value.version)
-              chrome.runtime.sendMessage(value.id, { type: 'reload' }, () => { void chrome.runtime.lastError })
-            }
-            if (value?.devReload && value.version) {
-              seen = value.version
-              localStorage.setItem('browser-bridge.version', value.version)
-            }
+            if (alive) setMeta(value)
           } catch {}
         }
         void tick()
@@ -251,12 +240,6 @@ window.__ModuleLoader__.load({
           'div',
           { style: row },
           h('a', { style: primary, href: '/browser-bridge/extension.zip', download: '' }, 'Download extension (.zip)'),
-          meta?.devReload
-            ? h('button', {
-                style: { ...filled, padding: '7px 12px' },
-                onClick: () => chrome.runtime.sendMessage(meta.id, { type: 'reload' }, () => { void chrome.runtime.lastError }),
-              }, 'Reload extension')
-            : null,
         ),
         h(
           'p',

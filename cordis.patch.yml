@@ -8,17 +8,10 @@
 # machines; `advertise` is the address those browsers should dial (auto-detected
 # from the first private IPv4 when omitted).
 #
-# `allowRemotePairing` decides whether /discover hands the token to a
-# non-loopback peer. true is convenient on a trusted home LAN; false means the
-# browser must be given the link once, after which it is remembered.
-#
-# `devReload` registers the dev routes (fixture pages, the arcade page, the dev
-# command channel) and the extension reload hook. Off in this default file.
+# LAN pairing and the dev routes are always on; they are not options.
 - insert:
     - id: browser-bridge
       name: 'browser-bridge'
       config:
         port: 8791
         bind: '0.0.0.0'
-        allowRemotePairing: true
-        devReload: false

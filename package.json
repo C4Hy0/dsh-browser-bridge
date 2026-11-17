@@ -1,6 +1,6 @@
 {
   "name": "browser-bridge",
-  "version": "1.1.295",
+  "version": "1.1.296",
   "private": true,
   "type": "module",
   "description": "Drive the browser you are signed into through a paired Chromium extension: ten tools over the DevTools Protocol.",
@@ -28,7 +28,7 @@
     "extension/**",
     "scripts/**",
     "icon.svg",
-    "images/**",
+    "docs/images/**",
     "locale/*.json"
   ],
   "dsh": {
