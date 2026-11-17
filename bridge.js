@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.1.296'
+export const VERSION = '1.1.297'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 /**
@@ -141,14 +141,12 @@ export class Bridge {
   #disposed = false
   #log
 
-  constructor({ host = '127.0.0.1', port = 8791, token, advertise, allowRemotePairing = false, log } = {}) {
+  constructor({ host = '127.0.0.1', port = 8791, token, advertise, log } = {}) {
     this.host = host
     this.port = port
     this.token = token
     /** Address the extension should dial; defaults to the bind address when routable. */
     this.advertise = advertise
-    /** Whether a non-loopback peer may receive the token from /discover. */
-    this.allowRemotePairing = allowRemotePairing === true
     this.#log = log
   }
 
@@ -473,8 +471,6 @@ export class Bridge {
     if (typeof origin === 'string' && origin.length > 0 && !origin.startsWith('chrome-extension://')) {
       return empty(res, 403)
     }
-    const remote = req.socket.remoteAddress ?? ''
-    const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
     const base = { ok: true, name: 'browser-bridge', protocol: PROTOCOL, version: VERSION }
     // Answer with the address the caller actually reached us on. Handing out the
     // advertised LAN address to a client that connected over loopback makes that
@@ -483,10 +479,10 @@ export class Bridge {
     const pairingUrl = typeof host === 'string' && host.length > 0
       ? `http://${host}/p/${this.token}`
       : this.pairingUrl
-    if (loopback || this.allowRemotePairing) {
-      return json(res, 200, { ...base, pairingUrl })
-    }
-    return json(res, 200, { ...base, needsLink: true })
+    // A browser on another machine has to be able to pair, so discovery hands
+    // the pairing URL to any caller that passed the Origin gate. Bind loopback
+    // to keep the port off the network.
+    return json(res, 200, { ...base, pairingUrl })
   }
 
   async #route(req, res) {

@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jidaron/dsh-browser-bridge/actions/workflows/ci.yml"><img src="https://github.com/Jidaron/dsh-browser-bridge/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+  <a href="https://github.com/C4Hy0/dsh-browser-bridge/actions/workflows/ci.yml"><img src="https://github.com/C4Hy0/dsh-browser-bridge/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
 </p>
 
 A DeepSeek Harness plugin and a Chromium extension that let an agent drive the
@@ -18,9 +18,6 @@ host plugin and pairs with it.
 Ten tools cover reading, input, waiting, screenshots, pixel sampling, network and
 console observation, and script evaluation. The host plugin listens on one local
 port and serves the extension zip and a small dashboard on the plugin page.
-
-The protocol, the safety model, remote pairing, the plugin page and the
-development notes are in [`docs/SPEC.md`](docs/SPEC.md).
 
 ## Requirements
 
@@ -111,17 +108,6 @@ read/act/wait loop, canvas and WebGL pages, iframes, network debugging, and
 recovery. It registers from the skill catalog when the plugin loads, so there is
 no project skill file to copy.
 
-## How a command reaches the browser
-
-The extension polls `http://<host>:8791/p/<token>/poll`. The host keeps one queue
-per browser, so two browsers never consume each other's commands, and a long poll
-doubles as the liveness signal. The extension executes the command with
-`chrome.debugger` in the tracked tab and posts the result back. Nothing dials into
-the browser, so the pair works through NAT.
-
-The pairing token is 32 random bytes in hex, stored at
-`<dsh home>/browser-bridge/token` with mode 0600.
-
 ## Configuration
 
 The row in `cordis.patch.yml`:
@@ -137,9 +123,6 @@ config:
 | `port` | 8791 | Listener port. The extension probes 8791-8811 on connect. A port outside that range still works when the pairing link is pasted. |
 | `bind` | `0.0.0.0` | Address to listen on. Use `127.0.0.1` for this machine only. |
 | `advertise` | auto | Address written into the pairing URL. Defaults to the first private IPv4. |
-
-LAN pairing and the dev routes are always on. They are not options, so they do
-not appear here and the row cannot turn them off.
 
 Port changes made from the plugin page are stored in
 `<dsh home>/browser-bridge/settings.json` and outrank the profile config. Reset

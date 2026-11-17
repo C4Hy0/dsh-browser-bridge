@@ -8,7 +8,6 @@
 # machines; `advertise` is the address those browsers should dial (auto-detected
 # from the first private IPv4 when omitted).
 #
-# LAN pairing and the dev routes are always on; they are not options.
 - insert:
     - id: browser-bridge
       name: 'browser-bridge'

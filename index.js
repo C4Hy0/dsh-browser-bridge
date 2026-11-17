@@ -25,7 +25,7 @@ import { packExtension, ZIP_NAME } from './scripts/pack-extension.mjs'
 // the mismatch looks like a bug in the extension. A unique query forces a fresh
 // module instance on every reload, which is what "toggle the bundle" promises.
 const toolModuleUrl = new URL('./tools.js', import.meta.url)
-const TOOLS_BUILD = '1.1.296'
+const TOOLS_BUILD = '1.1.297'
 toolModuleUrl.searchParams.set('reload', String(Date.now()))
 const { registerTools } = await import(toolModuleUrl.href)
 
@@ -35,7 +35,7 @@ export const inject = ['tools', 'attachments']
 
 const here = dirname(fileURLToPath(import.meta.url))
 /** Bumped by the release script; proves which host code is live. */
-const HOST_BUILD = '1.1.296'
+const HOST_BUILD = '1.1.297'
 const EXTENSION_ZIP = join(here, 'dist', 'browser-bridge-extension.zip')
 
 /**
@@ -131,11 +131,6 @@ export function apply(ctx, config = {}) {
   const advertise = typeof config?.advertise === 'string' && config.advertise.trim().length > 0
     ? config.advertise.trim()
     : detectAdvertiseHost(host)
-  // Both are part of the product, not options: a browser on another machine has
-  // to be able to pair, and the dev routes are how the tools are exercised.
-  // They are always on, and the row config cannot turn them off.
-  const allowRemotePairing = true
-  const devReload = true
 
   const extensionVersion = (() => {
     try {
@@ -146,7 +141,7 @@ export function apply(ctx, config = {}) {
   })()
 
   const spawnBridge = (listenPort) => {
-    const instance = new Bridge({ host, port: listenPort, token, advertise, allowRemotePairing, log: ctx.logger })
+    const instance = new Bridge({ host, port: listenPort, token, advertise, log: ctx.logger })
     // Publish the shipped extension version so the worker can self-update on poll.
     if (extensionVersion) instance.extensionVersion = extensionVersion
     return instance
@@ -473,81 +468,78 @@ export function apply(ctx, config = {}) {
       },
     }), 'browser-bridge: api disconnect')
 
-    if (devReload) {
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: '/browser-bridge/api/dev/status',
-        resource: async () => apiJson({ ok: true, devReload: true }),
-      }), 'browser-bridge: dev status')
+    ctx.effect(() => registerRoute({
+      kind: 'exact',
+      path: '/browser-bridge/api/dev/status',
+      resource: async () => apiJson({ ok: true }),
+    }), 'browser-bridge: dev status')
 
-      // Deterministic page for exercising the tools end to end.
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: '/browser-bridge/dev/fixture',
-        resource: async () => new Response(readFileSync(join(here, 'tests', 'fixture.html')), {
-          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-        }),
-      }), 'browser-bridge: dev fixture')
+    // Deterministic page for exercising the tools end to end.
+    ctx.effect(() => registerRoute({
+      kind: 'exact',
+      path: '/browser-bridge/dev/fixture',
+      resource: async () => new Response(readFileSync(join(here, 'tests', 'fixture.html')), {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      }),
+    }), 'browser-bridge: dev fixture')
 
-      // Child document for the fixture's iframe, so frame targeting has real content.
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: '/browser-bridge/dev/fixture-inner',
-        resource: async () => new Response(readFileSync(join(here, 'tests', 'fixture-inner.html')), {
-          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-        }),
-      }), 'browser-bridge: dev fixture inner')
+    // Child document for the fixture's iframe, so frame targeting has real content.
+    ctx.effect(() => registerRoute({
+      kind: 'exact',
+      path: '/browser-bridge/dev/fixture-inner',
+      resource: async () => new Response(readFileSync(join(here, 'tests', 'fixture-inner.html')), {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      }),
+    }), 'browser-bridge: dev fixture inner')
 
-      // Second-level child document, for nested-frame targeting.
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: '/browser-bridge/dev/fixture-deep',
-        resource: async () => new Response(readFileSync(join(here, 'tests', 'fixture-deep.html')), {
-          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-        }),
-      }), 'browser-bridge: dev fixture deep')
+    // Second-level child document, for nested-frame targeting.
+    ctx.effect(() => registerRoute({
+      kind: 'exact',
+      path: '/browser-bridge/dev/fixture-deep',
+      resource: async () => new Response(readFileSync(join(here, 'tests', 'fixture-deep.html')), {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      }),
+    }), 'browser-bridge: dev fixture deep')
 
-      // Small interaction benchmark: four mechanics, one word.
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: '/browser-bridge/dev/arcade',
-        resource: async () => new Response(readFileSync(join(here, 'tests', 'arcade.html')), {
-          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-        }),
-      }), 'browser-bridge: dev arcade')
+    // Small interaction benchmark: four mechanics, one word.
+    ctx.effect(() => registerRoute({
+      kind: 'exact',
+      path: '/browser-bridge/dev/arcade',
+      resource: async () => new Response(readFileSync(join(here, 'tests', 'arcade.html')), {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      }),
+    }), 'browser-bridge: dev arcade')
 
-      // Dev-only command channel so the end-to-end test can drive the browser
-      // without a model in the loop. GET with the method and JSON params.
-      ctx.effect(() => registerRoute({
-        kind: 'exact',
-        path: '/browser-bridge/dev/command',
-        resource: async (request) => {
-          const url = new URL(request.url, 'http://localhost')
-          const method = url.searchParams.get('method') ?? ''
-          if (!method) return apiJson({ ok: false, error: 'method required' }, 400)
-          const raw = url.searchParams.get('params')
-          let params = {}
-          if (raw) {
-            try {
-              params = JSON.parse(raw)
-            } catch {
-              return apiJson({ ok: false, error: 'params must be JSON' }, 400)
-            }
-          }
-          // With several paired profiles the worker refuses to guess, so the dev route
-          // accepts an explicit browser (query or params) and routes the command there.
-          const browser = url.searchParams.get('browser') ?? (typeof params.browser === 'string' ? params.browser : '')
-          if (browser) delete params.browser
+    // Dev-only command channel so the end-to-end test can drive the browser
+    // without a model in the loop. GET with the method and JSON params.
+    ctx.effect(() => registerRoute({
+      kind: 'exact',
+      path: '/browser-bridge/dev/command',
+      resource: async (request) => {
+        const url = new URL(request.url, 'http://localhost')
+        const method = url.searchParams.get('method') ?? ''
+        if (!method) return apiJson({ ok: false, error: 'method required' }, 400)
+        const raw = url.searchParams.get('params')
+        let params = {}
+        if (raw) {
           try {
-            const result = await bridge.send(method, params, { browser: browser || undefined, timeoutMs: 60000 })
-            return apiJson({ ok: true, result })
-          } catch (error) {
-            return apiJson({ ok: false, error: String(error?.message ?? error), code: error?.code ?? null }, 502)
+            params = JSON.parse(raw)
+          } catch {
+            return apiJson({ ok: false, error: 'params must be JSON' }, 400)
           }
-        },
-      }), 'browser-bridge: dev command')
-
-    }
+        }
+        // With several paired profiles the worker refuses to guess, so the dev route
+        // accepts an explicit browser (query or params) and routes the command there.
+        const browser = url.searchParams.get('browser') ?? (typeof params.browser === 'string' ? params.browser : '')
+        if (browser) delete params.browser
+        try {
+          const result = await bridge.send(method, params, { browser: browser || undefined, timeoutMs: 60000 })
+          return apiJson({ ok: true, result })
+        } catch (error) {
+          return apiJson({ ok: false, error: String(error?.message ?? error), code: error?.code ?? null }, 502)
+        }
+      },
+    }), 'browser-bridge: dev command')
 
     // What the dashboard reads to show the pinned id and version.
     ctx.effect(() => registerRoute({
@@ -561,10 +553,9 @@ export function apply(ctx, config = {}) {
             version: info.version,
             publicKey: info.publicKey,
             zipBytes: info.bytes,
-            devReload,
           })
         } catch {
-          return apiJson({ devReload })
+          return apiJson({})
         }
       },
     }), 'browser-bridge: extension meta')

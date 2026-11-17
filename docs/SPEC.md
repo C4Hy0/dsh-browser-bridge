@@ -14,8 +14,7 @@ with the code, the code wins: `extension/sw.js` holds the worker command table,
 ```
 
 `inject: ['tools', 'attachments']`. There is no Config schema. `port`, `bind`
-and `advertise` are read leniently with defaults. LAN pairing and the dev routes
-are always on and cannot be disabled from the row.
+and `advertise` are read leniently with defaults.
 
 ## 2. Endpoint
 
@@ -33,7 +32,8 @@ are always on and cannot be disabled from the row.
 peer is allowed, the pairing URL.
 
 - An `Origin` that is not `chrome-extension://...` gets `403`.
-- A non-loopback peer gets the pairing URL: LAN pairing is always on.
+- A non-loopback peer gets the pairing URL. Bind loopback to keep the port off
+  the network.
 - The response carries no CORS headers, so page JavaScript cannot read it.
 - The extension probes `127.0.0.1`, `localhost` and any host the user added, over
   ports 8791-8811 in parallel, with a 1.2 s abort per probe.
@@ -138,8 +138,8 @@ CRX installs, so the only supported install is the unpacked zip.
 
 - Loopback by default. A wildcard bind is explicit.
 - Every command route requires the token. The token file is 0600.
-- `/discover` refuses a non-extension Origin. LAN pairing is always on, so a
-  non-loopback peer gets the pairing URL.
+- `/discover` refuses a non-extension Origin. A non-loopback peer gets the
+  pairing URL; bind loopback to keep the port off the network.
 - Commands act on the tracked tab. Adopting another tab is an explicit
   `bsb_tabs` action.
 - Uploads use file paths on the machine that runs the browser.
@@ -206,6 +206,10 @@ case.
 
 ## 14. Development
 
+The host serves the dev routes: the fixture pages under `/browser-bridge/dev/`,
+the dev command channel, and the extension zip. They are part of the host, not a
+mode, so they are always registered.
+
 ```sh
 node scripts/pack-extension.mjs   # write dist/browser-bridge-extension.zip without a download
 node tests/selftest.mjs           # transport, routing, guards, packaging
@@ -240,3 +244,14 @@ skill/            bundled browser-bridge playbook
 docs/images/      screenshots used by the README
 tests/            selftest, e2e, webserver compatibility, fixtures
 ```
+
+## 15. Command path
+
+The extension polls `http://<host>:8791/p/<token>/poll`. The host keeps one queue
+per browser, so two browsers never consume each other's commands, and a long poll
+doubles as the liveness signal. The extension executes the command with
+`chrome.debugger` in the tracked tab and posts the result back. Nothing dials into
+the browser, so the pair works through NAT.
+
+The pairing token is 32 random bytes in hex, stored at
+`<dsh home>/browser-bridge/token` with mode 0600.

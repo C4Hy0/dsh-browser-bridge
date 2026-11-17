@@ -194,26 +194,20 @@ try {
   assert.equal((await fetch(`${BASE}/poll?waitMs=1000&id=browser-a`)).status, 204)
   console.log('ok  idle poll → 204')
 
-  // 12. LAN discovery: the token is withheld from remote peers unless opted in.
+  // 12. LAN discovery: a browser on another machine has to be able to pair, so
+  // discovery hands out the pairing URL to any caller that passes the Origin
+  // gate. There is no opt-in flag.
   const lan = Object.values(networkInterfaces()).flat().find((entry) => entry && entry.family === 'IPv4' && !entry.internal)
   if (lan) {
-    const strict = new Bridge({ host: '0.0.0.0', port: PORT + 1, token: TOKEN, advertise: lan.address })
-    await strict.start()
-    try {
-      const remote = await (await fetch(`http://${lan.address}:${PORT + 1}/discover`)).json()
-      assert.equal(remote.needsLink, true)
-      assert.equal(remote.pairingUrl, undefined)
-      console.log('ok  LAN discovery withholds the token by default')
-    } finally {
-      strict.dispose()
-    }
-
-    const open = new Bridge({ host: '0.0.0.0', port: PORT + 2, token: TOKEN, advertise: lan.address, allowRemotePairing: true })
+    const open = new Bridge({ host: '0.0.0.0', port: PORT + 2, token: TOKEN, advertise: lan.address })
     await open.start()
     try {
       const remote = await (await fetch(`http://${lan.address}:${PORT + 2}/discover`)).json()
       assert.equal(remote.pairingUrl, `http://${lan.address}:${PORT + 2}/p/${TOKEN}`)
-      console.log('ok  LAN discovery hands out the advertised address when opted in')
+      assert.equal(remote.needsLink, undefined)
+      const page = await fetch(`http://${lan.address}:${PORT + 2}/discover`, { headers: { origin: 'https://example.com' } })
+      assert.equal(page.status, 403)
+      console.log('ok  LAN discovery hands out the pairing URL; the Origin gate still applies')
     } finally {
       open.dispose()
     }
@@ -1371,11 +1365,15 @@ try {
     console.log('ok  evening-batch guards pinned (timeline, record status, sheet tiles, upload size, frame probe)')
   }
 
-  // Fixed product options and the docs layout.
+  // LAN pairing and the dev routes are part of the host, not switches, and the
+  // docs layout is part of the product.
   {
     const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8')
-    assert.ok(/const allowRemotePairing = true/.test(indexSource), 'LAN pairing is configurable again')
-    assert.ok(/const devReload = true/.test(indexSource), 'the dev routes are configurable again')
+    const bridgeSource = await readFile(new URL('../bridge.js', import.meta.url), 'utf8')
+    assert.ok(!/allowRemotePairing/.test(indexSource) && !/allowRemotePairing/.test(bridgeSource), 'LAN pairing is a flag again')
+    assert.ok(!/devReload/.test(indexSource), 'the dev routes are a flag again')
+    assert.ok(!/if \(devReload\)/.test(indexSource), 'the dev routes are still behind a condition')
+    assert.ok(/\/browser-bridge\/api\/dev\/status/.test(indexSource), 'the dev status route is gone')
     assert.ok(!/Reload extension/.test(clientSource), 'the plugin page still has a reload button')
     assert.ok(!/chrome\.runtime\.sendMessage\([^)]*type: 'reload'/.test(clientSource), 'the plugin page still asks the extension to reload')
     assert.ok(existsSync(new URL('../docs/images', import.meta.url)), 'images/ is not under docs/')
@@ -1383,7 +1381,13 @@ try {
     assert.ok(!existsSync(new URL('../design', import.meta.url)), 'design/ still exists')
     const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
     assert.ok(!/allowRemotePairing|devReload/.test(patch), 'cordis.patch.yml still carries the fixed options')
-    console.log('ok  fixed options, plugin page and docs layout pinned')
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+    const spec = await readFile(new URL('../docs/SPEC.md', import.meta.url), 'utf8')
+    assert.ok(!/^## How a command reaches the browser/m.test(readme), 'the command path is still in README')
+    assert.ok(/^## 15\. Command path/m.test(spec), 'the command path is not in SPEC')
+    assert.ok(!/docs\/SPEC\.md/.test(readme), 'README links to SPEC.md again')
+    assert.ok(/github\.com\/C4Hy0\/dsh-browser-bridge/.test(readme), 'the CI badge does not point at the repository')
+    console.log('ok  host behaviour, plugin page and docs layout pinned')
   }
 
   // Guards from the CaptchaWare run. Each of these was a silent failure or a
