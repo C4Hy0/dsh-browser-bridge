@@ -1406,6 +1406,23 @@ try {
     console.log('ok  host behaviour, plugin page and docs layout pinned')
   }
 
+  // The changelog and the release rules are the release record. A missing
+  // Unreleased section or an undated release heading makes the next release
+  // notes unverifiable.
+  {
+    const changelog = await readFile(new URL('../CHANGELOG.md', import.meta.url), 'utf8')
+    const releasing = await readFile(new URL('../docs/RELEASING.md', import.meta.url), 'utf8')
+    assert.ok(/^# Changelog\n/.test(changelog), 'CHANGELOG.md lost its title')
+    assert.ok(/^## \[Unreleased\]/m.test(changelog), 'CHANGELOG.md has no Unreleased section')
+    const releases = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})$/gm)]
+    assert.ok(releases.length > 0, 'CHANGELOG.md has no dated release')
+    assert.ok(/^# Releasing\n/.test(releasing), 'docs/RELEASING.md is missing or untitled')
+    for (const [, version, date] of releases) {
+      assert.equal(new Date(date).toISOString().slice(0, 10), date, `CHANGELOG.md has an invalid date for ${version}`)
+    }
+    console.log('ok  changelog and release rules are pinned')
+  }
+
   // Guards from the CaptchaWare run. Each of these was a silent failure or a
   // missing primitive that cost a workaround, so pin the contract: wheel input,
   // key-driven text, cross-origin frame reads, non-editable type targets,
