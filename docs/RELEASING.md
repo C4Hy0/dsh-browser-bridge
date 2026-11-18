@@ -43,11 +43,9 @@ notes consistent. They apply from 1.2.0 on.
 
 - Title: `X.Y.Z`.
 - First line: `Plugin X.Y.Z, extension A.B.C.`
-- Sections: `Changes`, `Fixes`, `Upgrade`. Omit an empty section.
-- Link the changelog entry for the full list.
-- `Upgrade` names both steps: replace and reload the extension; toggle the host
-  bundle or restart DSH.
-- No em dashes, no marketing, no "we are excited".
+- Body: the version changelog entry, copied from `CHANGELOG.md` exactly. The
+  release notes are the changelog for that version, not a separate summary.
+- A release note with no matching changelog entry is an incomplete release.
 
 ## Versioning
 
@@ -68,7 +66,7 @@ notes consistent. They apply from 1.2.0 on.
    layout moved.
 5. Export, commit with the release rule, push, and wait for CI.
 6. Tag `vX.Y.Z` with the tag message and push the tag.
-7. Create the GitHub release from the changelog entry.
+7. Create the GitHub release with the version changelog entry as the body.
 8. Toggle the bundle, verify `/browser-bridge/api/build`, and smoke the release.
 
 ## Where the rules live

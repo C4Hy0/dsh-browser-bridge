@@ -12,6 +12,11 @@ version is the manifest version.
 - This changelog, so the release notes are derived from the history instead of
   from memory.
 
+### Changed
+
+- Release notes are the version changelog entry itself. The separate Upgrade
+  section is gone.
+
 ## [1.2.0] - 2026-11-17
 
 Plugin 1.2.0, extension 1.1.0.
