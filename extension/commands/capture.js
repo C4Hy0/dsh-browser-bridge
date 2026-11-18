@@ -911,7 +911,8 @@ export async function screenshotPage({ fullPage, selector, rect, scale, frame, t
  */
 export async function sheetPage({ selector, offset, limit, scale, columns, tabId: hint }) {
   const tabId = await requirePage(hint)
-  await sweepMetrics(shared.recorder?.tabId ?? null)
+  // Sampling does not own the recorder, and sweeping a stale metrics tab here
+  // blocked the command loop until the tool watchdog fired (BSB-20261119-0120).
   const sel = typeof selector === 'string' ? selector.trim() : ''
   if (!sel) throw fail('NO_SELECTOR', 'pass a CSS selector whose matches should be tiled, e.g. "label.tile"')
   const cap = Math.min(Math.max(Number(limit) || 24, 1), 144)

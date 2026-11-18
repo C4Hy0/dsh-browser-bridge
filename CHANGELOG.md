@@ -6,9 +6,9 @@ version is the manifest version.
 
 ## [Unreleased]
 
-## [1.2.7] - 2026-11-19
+## [1.2.8] - 2026-11-19
 
-Extension 1.1.8.
+Extension 1.1.9.
 
 ### Added
 
@@ -50,6 +50,12 @@ Extension 1.1.8.
   click covered by an overlay fails `TARGET_COVERED`; `wheel` reports the
   scroller's before and after position and polls until the scroll lands.
 - A relative `saveTo` receipt carries the resolved absolute path.
+- `bsb_pixels` no longer sweeps recorder metrics on entry; a stale metrics tab
+  could stall the command loop until the watchdog fired.
+- A bridge or extension command timeout is `BUSY_TIMEOUT` and says the command may
+  have executed, so a caller reads the page before retrying.
+- A key pressed after a dialog record lapses fails `DIALOG_STATE_UNKNOWN` instead
+  of reporting a success-shaped `applied:true`.
 
 ### Changed
 

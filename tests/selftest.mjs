@@ -1443,6 +1443,8 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/explicit \? resolve\(explicit\)/.test(toolsSource), 'saveTo still writes a relative path it cannot name')
     assert.ok(/attempt < 12/.test(workerSource) && /pos\.x !== before\.x \|\| pos\.y !== before\.y/.test(workerSource), 'the wheel still reads once before the scroll lands')
     assert.ok(/box\.hit && typeof box\.hit === 'object'/.test(workerSource) && !/box\.hit === false/.test(workerSource), 'the covered click guard still compares the hit object to false')
+    assert.ok(/BSB-20261119-0120/.test(workerSource) && /DIALOG_STATE_UNKNOWN/.test(workerSource), 'pixels sweep or the lapsed dialog guard regressed')
+    assert.ok(/BUSY_TIMEOUT/.test(workerSource) && /const TIMEOUT_MS = 40000/.test(toolsSource), 'timeouts no longer carry BUSY_TIMEOUT below the harness watchdog')
     console.log('ok  saveTo resolves and the wheel polls for movement')
   }
 

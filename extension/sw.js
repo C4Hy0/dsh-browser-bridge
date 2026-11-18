@@ -113,7 +113,7 @@ async function startLoop() {
         // Never let one wedged command (a stuck screenshot) starve the loop.
         const settled = await Promise.race([
           runCommand(command),
-          delay(45000).then(() => ({ ok: false, error: { code: 'TIMEOUT', message: 'the command timed out' } })),
+          delay(45000).then(() => ({ ok: false, error: { code: 'BUSY_TIMEOUT', message: 'the command timed out; it may have executed, read the page before retrying' } })),
         ])
         await postResult(endpoint, command.id, { ...settled, browser: (await whoami()).id })
       } catch {
@@ -152,7 +152,7 @@ async function runCommand(command) {
     // A single CDP call that never settles must not stall the whole loop.
     const result = await Promise.race([
       execute(command.method, command.params ?? {}),
-      new Promise((_, reject) => setTimeout(() => reject(fail('TIMEOUT', 'the browser did not answer in time')), 30000)),
+      new Promise((_, reject) => setTimeout(() => reject(fail('BUSY_TIMEOUT', 'the browser did not answer in time; the command may have executed, read the page before retrying')), 30000)),
     ])
     return { ok: true, result }
   } catch (error) {

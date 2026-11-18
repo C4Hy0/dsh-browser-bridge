@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.2.7'
+export const VERSION = '1.2.8'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 /**
@@ -333,7 +333,7 @@ export class Bridge {
       const result = new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           this.#pending.delete(commandId)
-          reject(new BridgeError('TIMEOUT', `the browser did not answer "${method}" within ${Math.round(timeoutMs / 1000)}s`))
+          reject(new BridgeError('BUSY_TIMEOUT', `the browser did not answer "${method}" within ${Math.round(timeoutMs / 1000)}s; the bridge serializes commands, so it may have executed. Read the page before retrying.`))
         }, timeoutMs)
         this.#pending.set(commandId, { resolve, reject, timer, method, browser: id })
       })

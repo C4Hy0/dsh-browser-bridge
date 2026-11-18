@@ -17,7 +17,9 @@ const lossless = (value) => String(value).replace(/[\uD800-\uDBFF](?![\uDC00-\uD
 
 const MAX_CHARS = 30000
 const MAX_ELEMENTS = 200
-const TIMEOUT_MS = 45000
+// Below the harness's 45 s tool watchdog, so the typed BUSY_TIMEOUT wins
+// instead of a bare "tool call timed out" whose effect may already have landed.
+const TIMEOUT_MS = 40000
 
 const input = (properties, required = []) => ({
   type: 'object',

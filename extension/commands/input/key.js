@@ -78,10 +78,20 @@ export async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdM
   })()
   if (dialogKey) {
     const dialog = shared.dialogs.get(tabId)
-    if (dialog && Date.now() - dialog.at < 15000) {
+    if (dialog) {
+      const age = Date.now() - dialog.at
+      if (age < 15000) {
+        throw fail(
+          'DIALOG_AUTO_DISMISSED',
+          'a modal ' + String(dialog.type || 'dialog') + ' dialog (' + JSON.stringify(String(dialog.message ?? '')) + ') was auto-dismissed as cancelled when it opened, so ' + (key || 'Enter') + ' could not reach it and nothing was sent. Native dialogs are dismissed to keep the tab responsive; use a page-controlled dialog, or read the reply of the action that opened it.',
+        )
+      }
+      // The record outlives the 15 s window. Without this branch a slow caller
+      // falls back to applied:true for a dialog the page already cancelled
+      // (BSB-20261119-0135).
       throw fail(
-        'DIALOG_AUTO_DISMISSED',
-        'a modal ' + String(dialog.type || 'dialog') + ' dialog (' + JSON.stringify(String(dialog.message ?? '')) + ') was auto-dismissed as cancelled when it opened, so ' + (key || 'Enter') + ' could not reach it and nothing was sent. Native dialogs are dismissed to keep the tab responsive; use a page-controlled dialog, or read the reply of the action that opened it.',
+        'DIALOG_STATE_UNKNOWN',
+        'the last modal dialog for this tab was auto-dismissed as cancelled ' + Math.round(age / 1000) + 's ago, so this ' + (key || 'Enter') + ' was not delivered to any dialog. Read the page and open the dialog again before pressing a key.',
       )
     }
   }
