@@ -7,7 +7,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: 'browser-bridge',
+  id: 'dsh-browser-bridge',
   factory(require) {
     const React = require('react')
     const h = React.createElement

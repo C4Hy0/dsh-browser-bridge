@@ -1055,6 +1055,14 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
   assert.ok(/refreshStatus/.test(popupSource), 'the status light stopped refreshing')
   // And the page must send the exact endpoint, not let the extension guess a port.
   const clientSource = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  {
+    // The client-module loader keys the module by the installed package name; a
+    // rename that misses this id fails the whole plugin page with
+    // "loaded without registering ...".
+    const packageName = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).name
+    const clientId = /__ModuleLoader__\.load\(\{\s*id: '([^']+)'/.exec(clientSource)?.[1]
+    assert.equal(clientId, packageName, 'client.js registers a different module id than the package name')
+  }
   assert.ok(/type: 'connect', endpoint/.test(clientSource), 'the page stopped sending the exact bridge endpoint')
   assert.ok(/message\?\.endpoint/.test(workerSource), 'the worker ignores the endpoint the page sends')
   console.log('ok  pairing works from the popup too, and the page sends an exact endpoint')
