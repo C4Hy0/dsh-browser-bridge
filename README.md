@@ -34,6 +34,12 @@ port and serves the extension zip and a small dashboard on the plugin page.
 dsh plugin --profile web add /absolute/path/to/browser-bridge
 ```
 
+Or install the published package:
+
+```sh
+dsh plugin --profile web add dsh-bsb
+```
+
 The row is host-only. It listens on `127.0.0.1:8791` by default and registers the
 ten tools.
 

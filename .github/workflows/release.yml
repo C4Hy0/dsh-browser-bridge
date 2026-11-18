@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Update npm
+        run: npm install -g npm@latest
+      - name: Test
+        run: npm test
+      - name: Check the tag and changelog
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          node scripts/release-check.mjs --tag "$TAG"
+      - name: Pack
+        run: npm pack --dry-run
+      - name: Publish
+        if: github.event_name == 'push'
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${NAME}@${VERSION} is already published; nothing to do"
+            exit 0
+          fi
+          npm publish --provenance --access public
+      - name: Publish dry run
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish --dry-run --access public

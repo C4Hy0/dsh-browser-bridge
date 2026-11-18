@@ -59,6 +59,20 @@ straight quotes.
 - Patch for fixes, minor for features, major for a breaking change to the tool
   surface or the wire protocol.
 
+## Publishing to npm
+
+- The npm package is `dsh-bsb`. The DSH plugin id stays `browser-bridge`, so
+  existing rows are unaffected.
+- Pushing the release tag runs `.github/workflows/release.yml`. It checks the tag
+  against `package.json` and `CHANGELOG.md`, packs the tarball, and publishes
+  with provenance.
+- The workflow uses trusted publishing: npm verifies the GitHub Actions run
+  through OIDC and no token is stored. The package's trusted publisher must name
+  repository `C4Hy0/dsh-browser-bridge` and workflow `release.yml`.
+- The first package, 1.2.0, was published by hand to create the package. Later
+  tags use trusted publishing.
+- The workflow publishes only the package. It does not create a GitHub release.
+
 ## Release procedure
 
 1. Run `npm test`.
@@ -68,9 +82,13 @@ straight quotes.
 4. Sync `extension/` to both unpacked copies, removing stale files when the
    layout moved.
 5. Export, commit with the release rule, push, and wait for CI.
-6. Tag `vX.Y.Z` with the tag message and push the tag.
+6. Create the tag `vX.Y.Z` with the tag message and push it. The release
+   workflow publishes the npm package.
 7. Create the GitHub release with the version changelog entry as the body.
 8. Toggle the bundle, verify `/browser-bridge/api/build`, and smoke the release.
+
+Tags and GitHub releases are created only on an explicit release request. The
+release workflow reacts to a tag; it never creates one.
 
 ## Where the rules live
 

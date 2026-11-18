@@ -11,6 +11,9 @@ version is the manifest version.
 - `docs/RELEASING.md` with the commit, tag, release-note and changelog rules.
 - This changelog, so the release notes are derived from the history instead of
   from memory.
+- The plugin is published to npm as `dsh-bsb`. Pushing a `v*` tag publishes it
+  with provenance through trusted publishing. The first package, 1.2.0, was
+  published by hand.
 
 ### Changed
 

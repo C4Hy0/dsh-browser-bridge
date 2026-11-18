@@ -177,6 +177,12 @@ The extension id is pinned by the public key in
 There is no private key in the repository and no `.crx`: Chrome rejects off-store
 CRX installs, so the only supported install is the unpacked zip.
 
+The plugin is also published to npm as `dsh-bsb`. A `v*` tag runs
+`.github/workflows/release.yml`, which checks the tag, the package version and
+the changelog heading, then publishes with provenance through trusted
+publishing. The tag and the GitHub release are maintainer actions; the workflow
+publishes only the package.
+
 ## 10. Security
 
 - Loopback by default. A wildcard bind is explicit.

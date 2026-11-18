@@ -1,7 +1,6 @@
 {
-  "name": "browser-bridge",
+  "name": "dsh-bsb",
   "version": "1.2.0",
-  "private": true,
   "type": "module",
   "description": "Drive the browser you are signed into through a paired Chromium extension: ten tools over the DevTools Protocol.",
   "exports": {
@@ -15,6 +14,7 @@
   "files": [
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "index.js",
     "http-adapter.js",
     "tests/fixture.html",
@@ -61,5 +61,8 @@
   ],
   "scripts": {
     "test": "node tests/run-tests.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
