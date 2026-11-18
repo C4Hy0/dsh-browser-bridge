@@ -184,7 +184,7 @@ function guardOwnership(method, params) {
   if (method !== 'closeTab') return
   const clash = ownershipOf(params)
   if (clash && params.confirm !== true) {
-    throw fail('TAB_NOT_OWNED', 'tab ' + clash.tabId + ' was opened by session ' + clash.owner + '; pass confirm:true to close it anyway.')
+    throw fail('TAB_NOT_OWNED', 'TAB_NOT_OWNED: tab ' + clash.tabId + ' was opened by session ' + clash.owner + '; pass confirm:true to close it anyway.')
   }
 }
 

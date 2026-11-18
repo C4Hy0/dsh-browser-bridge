@@ -40,7 +40,9 @@ export async function assertFilesReadable(tabId, selector, contextId) {
     throw fail(
       'FILE_NOT_READABLE',
       `the page received ${empty.map((file) => file.name).join(', ')} with 0 bytes: the browser could not read the file path. `
-      + 'On a remote browser, pass a path that exists on that machine, or serve the file over http and download it there. Nothing usable was attached.',
+      + 'On a remote browser, pass a path that exists on that machine, or serve the file over http and download it there. '
+      + 'The input now holds a 0-byte entry named after that path, and any earlier selection it held was replaced. '
+      + 'A directory or a glob is not a regular file; pass the full path of one file.',
     )
   }
 }

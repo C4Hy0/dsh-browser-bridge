@@ -306,7 +306,11 @@ export async function consolePage({ action, limit, tabId: hint }) {
     capture.entries = []
     return { tabId, capturing: capture.active, cleared: true }
   }
-  if (mode !== 'log') throw fail('BAD_ARGUMENT', 'action must be start, log or clear')
+  if (mode === 'stop') {
+    capture.active = false
+    return { tabId, stopped: true, captured: capture.entries.length, capturing: false }
+  }
+  if (mode !== 'log') throw fail('BAD_ARGUMENT', 'action must be start, log, stop or clear')
   const cap = Math.min(Math.max(Number(limit) || 60, 1), 500)
   return { tabId, capturing: capture.active, total: capture.entries.length, entries: capture.entries.slice(-cap) }
 }

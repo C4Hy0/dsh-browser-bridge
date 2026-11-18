@@ -1410,6 +1410,16 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     console.log('ok  session ownership and bsb_open tabId are pinned')
   }
 
+  // Typed tab errors, persistent dialog records, console stop, upload truth.
+  {
+    assert.ok(/TAB_NOT_OWNED: tab/.test(workerSource), 'the ownership refusal lost its typed prefix')
+    assert.ok(/TAB_NOT_FOUND/.test(workerSource) && /is not open, so the call cannot target it/.test(workerSource), 'an unknown tabId falls back to the tracked tab')
+    assert.ok(!/shared\.dialogs\.delete\(tabId\)/.test(workerSource), 'a dialog record is consumed by the first reader again')
+    assert.ok(/mode === 'stop'/.test(workerSource) && /action must be start, log, stop or clear/.test(workerSource), 'console capture has no stop')
+    assert.ok(/earlier selection it held was replaced/.test(workerSource), 'a failed upload hides that it replaced the previous attachment')
+    console.log('ok  typed tab errors, persistent dialogs, console stop and upload truth are pinned')
+  }
+
   // LAN pairing and the dev routes are part of the host, not switches, and the
   // docs layout is part of the product.
   {

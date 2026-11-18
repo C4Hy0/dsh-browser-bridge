@@ -171,14 +171,19 @@ export async function openPage({ url, newTab, activate, tabId: hint, owner }) {
 
 export async function requirePage(hint) {
   if (typeof hint === 'number') {
-    try {
-      const tab = await chrome.tabs.get(hint)
-      // An explicit tabId addresses that tab for this call only. Adopting it
-      // silently moved the tracked tab, so reading a second tab while driving
-      // the first retargeted every later call. Only bsb_open and bsb_tabs use
-      // change the tracked tab.
-      if (tab) return tab.id
-    } catch {}
+    // An explicit tabId addresses that tab for this call only, and an unknown id
+    // is an error: falling back to the tracked tab silently retargeted a
+    // mistyped or stale id onto whatever page another agent was using
+    // (BSB-20261118-2340).
+    let tab
+    try { tab = await chrome.tabs.get(hint) } catch {}
+    if (!tab) {
+      throw fail('TAB_NOT_FOUND', 'tab ' + hint + ' is not open, so the call cannot target it; run bsb_tabs {action:"list"} for open tabs, or bsb_open to create one.')
+    }
+    if (isInternalUrl(tab.url)) {
+      throw fail('TAB_NOT_SCRIPTABLE', 'tab ' + hint + ' is ' + String(tab.url ?? '') + ', a browser-internal page bsb cannot script; target an http(s) tab instead.')
+    }
+    return tab.id
   }
   const tab = await trackedTab()
   if (!tab) throw fail('NO_TAB', 'No page is open; call bsb_open first.')

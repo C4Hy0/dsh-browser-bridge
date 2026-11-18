@@ -150,10 +150,9 @@ export async function readPage({ maxChars, maxElements, probe, frame, normalize,
     if (hint) value.hint = hint
   }
   const dialog = recentDialog(tabId)
-  if (dialog) {
-    value.dialog = dialog
-    shared.dialogs.delete(tabId)
-  }
+  // Keep the record for its 15 s window: a read must not consume the only copy,
+  // or the next Enter looks like it reached a live dialog (BSB-20261118-2345).
+  if (dialog) value.dialog = dialog
   if (frameHit) {
     value.frameId = frameHit.frameId
     if (frameHit.url) value.frameUrl = frameHit.url

@@ -79,7 +79,6 @@ export async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdM
   if (dialogKey) {
     const dialog = shared.dialogs.get(tabId)
     if (dialog && Date.now() - dialog.at < 15000) {
-      shared.dialogs.delete(tabId)
       throw fail(
         'DIALOG_AUTO_DISMISSED',
         'a modal ' + String(dialog.type || 'dialog') + ' dialog (' + JSON.stringify(String(dialog.message ?? '')) + ') was auto-dismissed as cancelled when it opened, so ' + (key || 'Enter') + ' could not reach it and nothing was sent. Native dialogs are dismissed to keep the tab responsive; use a page-controlled dialog, or read the reply of the action that opened it.',

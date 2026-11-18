@@ -34,8 +34,14 @@ version is the manifest version.
 - `bsb_open` honors `tabId`: it navigates the named tab and leaves the tracked
   tab alone.
 - Tabs opened by a session carry its id. A cross-session close requires
-  `confirm:true` (`TAB_NOT_OWNED`), and a cross-session read or write reply names
-  the owning session.
+  `confirm:true` (`TAB_NOT_OWNED: ...`), and a cross-session read or write reply
+  names the owning session.
+- An unknown numeric `tabId` fails `TAB_NOT_FOUND` instead of falling back to the
+  tracked tab.
+- The auto-dismissed dialog record lasts its 15 s window, so every Enter or Escape
+  fails `DIALOG_AUTO_DISMISSED`, not just the first.
+- Console capture has `action:"stop"` with the captured count.
+- A failed upload names the 0-byte entry and the replaced previous attachment.
 
 ### Changed
 
