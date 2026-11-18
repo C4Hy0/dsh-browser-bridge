@@ -61,9 +61,9 @@ straight quotes.
 
 ## Publishing to npm
 
-- The repository package stays `browser-bridge`. That name is what the DSH plugin
-  metadata resolver checks for the icon and locale files, and what the local row
-  specifier uses.
+- The project package is `dsh-browser-bridge`, matching the repository. That
+  name is what the DSH plugin metadata resolver checks for the icon and locale
+  files, and what the local row specifier uses.
 - The npm package is `dsh-bsb`. Before publishing, `.github/workflows/release.yml`
   copies the tree to a temporary directory, sets `name` to `dsh-bsb`, and rewrites
   the row's `name` specifier to `dsh-bsb`. The row id stays `browser-bridge`.

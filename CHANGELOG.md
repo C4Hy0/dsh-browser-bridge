@@ -16,9 +16,10 @@ version is the manifest version.
   published by hand.
 - Every page tool accepts `tabId` for one call, so concurrent agents can drive
   different tabs of one browser without moving each other's tracked tab.
-- The repository package name stays `browser-bridge` so the plugin icon and
-  locale metadata resolve. The release workflow publishes it to npm as
-  `dsh-bsb` with the row name rewritten, which fixes the bootstrap 1.2.0 package.
+- The project package is `dsh-browser-bridge`, matching the repository, so the
+  plugin icon and locale metadata resolve. The npm copy is `dsh-bsb` with the row
+  name rewritten; the DSH row id stays `browser-bridge`. This fixes the bootstrap
+  1.2.0 package.
 
 ### Fixed
 

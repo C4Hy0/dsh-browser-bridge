@@ -1,4 +1,4 @@
-# browser-bridge protocol and command reference
+# dsh-browser-bridge protocol and command reference
 
 This document describes host 1.2.0 and extension 1.1.0. Where it disagrees
 with the code, the code wins: `extension/sw.js` holds the worker command table,
@@ -9,7 +9,7 @@ with the code, the code wins: `extension/sw.js` holds the worker command table,
 ```yaml
 - insert:
     - id: browser-bridge
-      name: 'browser-bridge'
+      name: 'dsh-browser-bridge'
       config: { port: 8791, bind: '0.0.0.0' }
 ```
 

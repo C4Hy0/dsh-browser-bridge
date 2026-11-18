@@ -10,7 +10,7 @@
 #
 - insert:
     - id: browser-bridge
-      name: 'browser-bridge'
+      name: 'dsh-browser-bridge'
       config:
         port: 8791
         bind: '0.0.0.0'
