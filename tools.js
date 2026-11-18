@@ -318,8 +318,11 @@ export function registerTools(ctx, bridge) {
     get(target, prop) {
       if (prop === 'send') {
         return async (method, params, options) => {
+          const owner = typeof options?.owner === 'string' ? options.owner : undefined
+          const payload = owner ? { ...params, owner } : params
+          const { owner: _owner, ...rest } = options ?? {}
           try {
-            return await rawSend(method, params, options)
+            return await rawSend(method, payload, rest)
           } catch (error) {
             if (/no page is open/i.test(String(error?.message ?? error))) {
               throw new Error('No page is tracked — run bsb_tabs action:"list", then action:"use" with a tabId, or bsb_open to open one.')
@@ -337,6 +340,15 @@ export function registerTools(ctx, bridge) {
   })
   const register = (definition) => {
     ctx.effect(() => ctx.tools.register(definition), `browser-bridge: ${definition.name}`)
+  }
+
+  // Attach the calling agent's session id to every page command so the worker can
+  // name the owner of a tab another session opened. Tools that ignore exec (older
+  // callers) keep the old behaviour.
+  const ownerBridge = (exec) => {
+    const owner = exec && exec.agent && typeof exec.agent.id === 'string' ? exec.agent.id : undefined
+    if (!owner) return bridge
+    return { send: (method, params, options) => bridge.send(method, params, { ...(options ?? {}), owner }) }
   }
 
   register({
@@ -383,6 +395,7 @@ export function registerTools(ctx, bridge) {
     parameters: input({
       action: { type: 'string', enum: ['list', 'use', 'reload', 'close'], description: 'Defaults to list.' },
       tabId: { type: 'number', description: 'Required for action use/close; optional for reload (defaults to the tracked tab).' },
+      confirm: { type: 'boolean', description: 'close: set true to close a tab opened by another session. Without it a cross-session close fails TAB_NOT_OWNED.' },
       activate: { type: 'boolean', description: 'use: bring the tab to the front (default true).' },
       browser: browserProperty,
     }),
@@ -456,7 +469,8 @@ export function registerTools(ctx, bridge) {
             : jsonRender(value)),
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const action = stringArg(args, 'action') ?? 'list'
       const browser = stringArg(args, 'browser')
       const activate = args?.activate
@@ -475,7 +489,7 @@ export function registerTools(ctx, bridge) {
         if (activate === false) params.activate = false
         return bridge.send('use', params, { browser, timeoutMs: TIMEOUT_MS })
       }
-      return bridge.send('closeTab', { tabId }, { browser, timeoutMs: TIMEOUT_MS })
+      return bridge.send('closeTab', { tabId, confirm: args?.confirm === true }, { browser, timeoutMs: TIMEOUT_MS })
     },
   })
 
@@ -526,7 +540,8 @@ export function registerTools(ctx, bridge) {
         : jsonRender(v)),
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const expression = stringArg(args, 'expression')
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const browser = stringArg(args, 'browser')
@@ -614,13 +629,14 @@ export function registerTools(ctx, bridge) {
       render: (_args, value) => jsonRender(value),
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const url = stringArg(args, 'url')
       if (!url) throw new Error('url is required')
       if (!/^https?:\/\//i.test(url)) throw new Error('url must start with http:// or https://')
       return bridge.send(
         'open',
-        { url, newTab: args?.newTab === true, activate: args?.activate === true },
+        { url, newTab: args?.newTab === true, activate: args?.activate === true, tabId: typeof args?.tabId === 'number' ? args.tabId : undefined },
         { browser: stringArg(args, 'browser'), timeoutMs: TIMEOUT_MS },
       )
     },
@@ -736,7 +752,8 @@ export function registerTools(ctx, bridge) {
       render: (args, value) => (args?.kind === 'sheet' || Array.isArray(value?.tiles) ? renderSheet(args, value) : renderCapture(args, value)),
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const { mkdir, writeFile } = await import('node:fs/promises')
       const dir = (stringArg(args, 'saveDir') || '/tmp/bsb-shots').replace(/\/+$/, '')
@@ -1001,7 +1018,8 @@ export function registerTools(ctx, bridge) {
       },
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       // A plain delay needs no page traffic at all: time-gated pages (idle
       // games, countdowns, autosave) are the common case, and polling them
@@ -1143,7 +1161,8 @@ export function registerTools(ctx, bridge) {
       },
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       return bridge.send(
         'pixels',
@@ -1229,7 +1248,8 @@ export function registerTools(ctx, bridge) {
       render: (_args, value) => jsonRender(value),
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const action = stringArg(args, 'action')
       const browser = stringArg(args, 'browser')
@@ -1374,7 +1394,8 @@ export function registerTools(ctx, bridge) {
       },
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const mode = stringArg(args, 'mode') || 'text'
       const browser = stringArg(args, 'browser')
@@ -1459,7 +1480,8 @@ export function registerTools(ctx, bridge) {
       },
     },
     timeoutMs: TIMEOUT_MS,
-    async execute(args) {
+    async execute(args, exec) {
+      const bridge = ownerBridge(exec)
       const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const kind = stringArg(args, 'kind')
       const browser = stringArg(args, 'browser')

@@ -1398,6 +1398,18 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     console.log('ok  per-tab reads, frame state and dialog truth are pinned')
   }
 
+  // Session ownership and bsb_open tabId (BSB-20261118-2315, 2320).
+  {
+    assert.ok(/TAB_NOT_OWNED/.test(workerSource), 'a cross-session close is silent again')
+    assert.ok(/tabOwners: new Map\(\)/.test(workerSource), 'the worker no longer records tab owners')
+    assert.ok(/const explicit = typeof hint === 'number'/.test(workerSource), 'bsb_open still prefers the tracked tab over an explicit tabId')
+    assert.ok(/ownerBridge\(exec\)/.test(toolsSource), 'page tools no longer carry the calling session')
+    assert.ok(/tabId: typeof args\?\.tabId === 'number' \? args\.tabId : undefined \}/.test(toolsSource), 'bsb_open drops tabId again')
+    assert.ok(/confirm: args\?\.confirm === true/.test(toolsSource), 'bsb_tabs close cannot be confirmed explicitly')
+    assert.ok(/confirm: \{ type: 'boolean'/.test(toolsSource), 'bsb_tabs does not advertise confirm')
+    console.log('ok  session ownership and bsb_open tabId are pinned')
+  }
+
   // LAN pairing and the dev routes are part of the host, not switches, and the
   // docs layout is part of the product.
   {

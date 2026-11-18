@@ -68,14 +68,24 @@ export async function openUrl({ url, active = true }) {
   return { tabId: tab.id, url: tab.url ?? url, title: tab.title ?? '', status: tab.status ?? '' }
 }
 
-export async function openPage({ url, newTab, activate, tabId: hint }) {
+export async function openPage({ url, newTab, activate, tabId: hint, owner }) {
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw fail('BAD_ARGUMENT', 'url must be an absolute http(s) URL')
-  // Never borrow a tab the user is on: an earlier same-origin adoption rule
-  // navigated the dashboard's own tab. Reuse only the tab this session tracks,
-  // or the tab explicitly named by the caller; otherwise create one.
-  let tab = newTab ? undefined : await trackedTab()
-  if (!tab && typeof hint === 'number') {
-    tab = await chrome.tabs.get(hint).catch(() => undefined)
+  // An explicit tabId wins over the tracked tab: the call navigates that tab for
+  // this command and leaves the tracker where it was, so one agent's open cannot
+  // move the page another agent is reading (BSB-20261118-2315).
+  const explicit = typeof hint === 'number' ? hint : null
+  let tab
+  if (explicit !== null) {
+    tab = await chrome.tabs.get(explicit).catch(() => undefined)
+    if (!tab) throw fail('TAB_NOT_FOUND', 'tab ' + explicit + ' is not open, so it cannot be navigated; run bsb_tabs {action:"list"} or open a new tab.')
+    if (isInternalUrl(tab.url)) {
+      throw fail('TAB_NOT_SCRIPTABLE', 'tab ' + explicit + ' is ' + String(tab.url ?? '') + ', a browser-internal page bsb cannot script; open the http(s) URL with newTab:true.')
+    }
+  } else {
+    // Never borrow a tab the user is on: an earlier same-origin adoption rule
+    // navigated the dashboard's own tab. Reuse only the tab this session tracks,
+    // or open one.
+    tab = newTab ? undefined : await trackedTab()
   }
   // A browser-internal tracked tab (chrome://newtab/ is the only tab on a fresh
   // profile) cannot be attached to, so reusing it made the first bsb_open of a
@@ -93,8 +103,12 @@ export async function openPage({ url, newTab, activate, tabId: hint }) {
   }
   // Background by default: opening a page for automation must not raise the
   // window or steal the active tab. activate:true is the explicit opt-in.
-  if (!tab) tab = await chrome.tabs.create({ url: 'about:blank', active: activate === true })
-  await trackId(tab.id)
+  const created = !tab
+  if (created) tab = await chrome.tabs.create({ url: 'about:blank', active: activate === true })
+  if (explicit === null) await trackId(tab.id)
+  // Only a tab this call created gets an owner. A reused tracked tab is shared
+  // by design, and an explicit tabId keeps the owner it already has.
+  if (created && typeof owner === 'string' && owner) shared.tabOwners.set(tab.id, owner)
   shared.refs = new Map()
   const recovered = await attachTab(tab.id, { recover: true })
   await send(tab.id, 'Page.enable')

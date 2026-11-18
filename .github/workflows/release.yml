@@ -31,10 +31,22 @@ jobs:
             TAG="v$(node -p "require('./package.json').version")"
           fi
           node scripts/release-check.mjs --tag "$TAG"
+      - name: Prepare the npm package
+        run: |
+          # The repository package stays browser-bridge so the local plugin and
+          # its icon/locale metadata resolve. npm gets a copy named dsh-bsb, and
+          # the row's name specifier must match that installed package.
+          mkdir -p "$RUNNER_TEMP/npm"
+          rsync -a --exclude node_modules --exclude .git --exclude dist ./ "$RUNNER_TEMP/npm/"
+          cd "$RUNNER_TEMP/npm"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='dsh-bsb';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+          node -e "const fs=require('fs');let s=fs.readFileSync('cordis.patch.yml','utf8');s=s.replace(/^\s*name: 'browser-bridge'$/m, \"        name: 'dsh-bsb'\");fs.writeFileSync('cordis.patch.yml',s)"
       - name: Pack
+        working-directory: ${{ runner.temp }}/npm
         run: npm pack --dry-run
       - name: Publish
         if: github.event_name == 'push'
+        working-directory: ${{ runner.temp }}/npm
         run: |
           NAME="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
@@ -45,4 +57,5 @@ jobs:
           npm publish --provenance --access public
       - name: Publish dry run
         if: github.event_name == 'workflow_dispatch'
+        working-directory: ${{ runner.temp }}/npm
         run: npm publish --dry-run --access public

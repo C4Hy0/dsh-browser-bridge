@@ -16,6 +16,9 @@ version is the manifest version.
   published by hand.
 - Every page tool accepts `tabId` for one call, so concurrent agents can drive
   different tabs of one browser without moving each other's tracked tab.
+- The repository package name stays `browser-bridge` so the plugin icon and
+  locale metadata resolve. The release workflow publishes it to npm as
+  `dsh-bsb` with the row name rewritten, which fixes the bootstrap 1.2.0 package.
 
 ### Fixed
 
@@ -27,6 +30,11 @@ version is the manifest version.
 - A key pressed at an auto-dismissed dialog fails `DIALOG_AUTO_DISMISSED`
   instead of claiming success, and an old dialog is no longer echoed.
 - `friction/run-checks.mjs` reports the default target instead of "browser none".
+- `bsb_open` honors `tabId`: it navigates the named tab and leaves the tracked
+  tab alone.
+- Tabs opened by a session carry its id. A cross-session close requires
+  `confirm:true` (`TAB_NOT_OWNED`), and a cross-session read or write reply names
+  the owning session.
 
 ### Changed
 

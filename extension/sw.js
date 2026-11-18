@@ -166,7 +166,45 @@ async function runCommand(command) {
   }
 }
 
+/**
+ * Tabs created by a session carry its id. A different session may still read or
+ * write them, but the reply says so, and a close needs confirm:true. This is the
+ * soft ownership rule: no lock, no lease, just a name on the reply.
+ */
+function ownershipOf(params) {
+  const tabId = typeof params?.tabId === 'number' ? params.tabId : null
+  const owner = typeof params?.owner === 'string' ? params.owner : ''
+  if (tabId === null || !owner) return null
+  const tabOwner = shared.tabOwners.get(tabId)
+  if (!tabOwner || tabOwner === owner) return null
+  return { tabId, owner: String(tabOwner) }
+}
+
+function guardOwnership(method, params) {
+  if (method !== 'closeTab') return
+  const clash = ownershipOf(params)
+  if (clash && params.confirm !== true) {
+    throw fail('TAB_NOT_OWNED', 'tab ' + clash.tabId + ' was opened by session ' + clash.owner + '; pass confirm:true to close it anyway.')
+  }
+}
+
+function annotateOwnership(method, params, result) {
+  const clash = ownershipOf(params)
+  if (!clash || !result || typeof result !== 'object') return result
+  if (!result.hint) {
+    const verb = method === 'closeTab' ? 'close' : (['read', 'eval', 'pixels', 'inspect', 'feed', 'html', 'frames', 'imageSource', 'network', 'console', 'timeline', 'screenshot', 'sheet', 'record', 'waitFor'].includes(method) ? 'read' : 'write')
+    result.hint = 'tab ' + clash.tabId + ' was opened by session ' + clash.owner + '; this ' + verb + ' affects that session\'s page.'
+  }
+  return result
+}
+
 async function execute(method, params) {
+  guardOwnership(method, params)
+  const result = await dispatch(method, params)
+  return annotateOwnership(method, params, result)
+}
+
+async function dispatch(method, params) {
   switch (method) {
     case 'open': return openPage(params)
     case 'openUrl': return openUrl(params)

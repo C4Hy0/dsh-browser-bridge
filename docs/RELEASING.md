@@ -61,16 +61,23 @@ straight quotes.
 
 ## Publishing to npm
 
-- The npm package is `dsh-bsb`. The DSH plugin id stays `browser-bridge`, so
-  existing rows are unaffected.
-- Pushing the release tag runs `.github/workflows/release.yml`. It checks the tag
-  against `package.json` and `CHANGELOG.md`, packs the tarball, and publishes
+- The repository package stays `browser-bridge`. That name is what the DSH plugin
+  metadata resolver checks for the icon and locale files, and what the local row
+  specifier uses.
+- The npm package is `dsh-bsb`. Before publishing, `.github/workflows/release.yml`
+  copies the tree to a temporary directory, sets `name` to `dsh-bsb`, and rewrites
+  the row's `name` specifier to `dsh-bsb`. The row id stays `browser-bridge`.
+  Publishing the repository tree directly would ship a package whose metadata
+  does not resolve.
+- Pushing the release tag runs the workflow. It checks the tag against
+  `package.json` and `CHANGELOG.md`, then packs and publishes the dsh-bsb copy
   with provenance.
 - The workflow uses trusted publishing: npm verifies the GitHub Actions run
   through OIDC and no token is stored. The package's trusted publisher must name
   repository `C4Hy0/dsh-browser-bridge` and workflow `release.yml`.
-- The first package, 1.2.0, was published by hand to create the package. Later
-  tags use trusted publishing.
+- The first package, 1.2.0, was published by hand to create the package; it
+  predates the name rewrite and should be treated as a bootstrap version. Later
+  tags use trusted publishing and the rewritten package.
 - The workflow publishes only the package. It does not create a GitHub release.
 
 ## Release procedure
