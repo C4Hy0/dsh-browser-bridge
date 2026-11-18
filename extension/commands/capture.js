@@ -152,10 +152,16 @@ export async function captureShot(prep, { hidden = false } = {}) {
     const width = view?.clientWidth || view?.width || 0
     const height = view?.clientHeight || view?.height || 0
     if (width > 0 && height > 0) {
+      // The clip is in document coordinates. clientX/clientY do not exist on the
+      // layout metrics, so the old code silently started at document 0 and a
+      // scrolled selector captured whatever sat at its viewport offset instead
+      // of the element. pageX/pageY name the viewport's document origin.
+      const originX = Number(view.pageX ?? 0)
+      const originY = Number(view.pageY ?? 0)
       params = {
         format: 'png',
         captureBeyondViewport: true,
-        clip: { x: view.clientX ?? 0, y: view.clientY ?? 0, width, height, scale: 1 },
+        clip: { x: originX, y: originY, width, height, scale: 1 },
       }
     }
   }
@@ -1162,8 +1168,8 @@ export async function fetchBytesDirect(url) {
   return { mime: res.headers.get('content-type') || '', base64: btoa(bin) }
 }
 
-export async function imageSource({ selector }) {
-  const tabId = await requirePage()
+export async function imageSource({ selector, tabId: hint }) {
+  const tabId = await requirePage(hint)
   const meta = await pageMeta(tabId)
   const sel = String(selector ?? 'img')
   const src = await evaluate(tabId, '(() => { const el = document.querySelector(' + JSON.stringify(sel) + '); if (!el) return null; if (el.tagName === "CANVAS") { try { return el.toDataURL("image/png") } catch { return null } } return el.currentSrc || el.src || null })()')

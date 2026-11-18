@@ -14,6 +14,19 @@ version is the manifest version.
 - The plugin is published to npm as `dsh-bsb`. Pushing a `v*` tag publishes it
   with provenance through trusted publishing. The first package, 1.2.0, was
   published by hand.
+- Every page tool accepts `tabId` for one call, so concurrent agents can drive
+  different tabs of one browser without moving each other's tracked tab.
+
+### Fixed
+
+- A selector capture on a scrolled page uses the viewport's document origin, so
+  it returns the element instead of a crop of unrelated content.
+- A frame read reports the frame's own document counts and labels truncated text
+  and elements.
+- `bsb_read` honors `tabId` instead of silently reading the tracked tab.
+- A key pressed at an auto-dismissed dialog fails `DIALOG_AUTO_DISMISSED`
+  instead of claiming success, and an old dialog is no longer echoed.
+- `friction/run-checks.mjs` reports the default target instead of "browser none".
 
 ### Changed
 

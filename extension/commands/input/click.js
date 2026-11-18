@@ -9,6 +9,9 @@ import { delay, fail, inputSuccess, recentCreatedTab, recentDialog, resolveTarge
 
 export async function clickPage({ target, text, x, y, frame, count, targets, all, button, holdMs, verify, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  // Only a dialog that opens during this call is part of this reply; an older
+  // auto-dismissed dialog must not be echoed as if this click caused it.
+  const startedAt = Date.now()
   // Refuse before measuring or dispatching: input into a hidden page is held by
   // the browser and replayed later, which is worse than an error.
   const { visibility, forced } = await requireInputVisibility(tabId, 'click', forceWanted)
@@ -66,7 +69,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
     }
     await delay(200)
     const batchMeta = await pageMeta(tabId)
-    return finish({ url: batchMeta?.url ?? '', title: batchMeta?.title ?? '', clicked, clicks: clicked.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
+    return finish({ url: batchMeta?.url ?? '', title: batchMeta?.title ?? '', clicked, clicks: clicked.length, windowRestored: layout.restored, dialog: recentDialog(tabId, startedAt) }, beforePrint)
   }
   // Coordinate clicks: many widgets (canvas maps, custom controls) expose no
   // usable selector, but the agent can still see where to press.
@@ -79,7 +82,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
     let meta = await pageMeta(tabId)
     const followed = await followMapArea(tabId, px, py, before?.url, meta?.url)
     if (followed) meta = (await pageMeta(tabId)) ?? meta
-    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId), followed }, beforePrint)
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId, startedAt), followed }, beforePrint)
   }
   // Frames: the element lives in a child document, but the pointer is global —
   // resolve the point locally, then offset it by the frame's box in this page.
@@ -111,7 +114,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
     const taps = await pressAt(tabId, { x: px, y: py }, count, button, holdMs)
     await delay(400)
     const meta = await pageMeta(tabId)
-    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', frameId: hit.frameId, clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
+    return finish({ url: meta?.url ?? '', title: meta?.title ?? '', frameId: hit.frameId, clickedAt: { x: px, y: py }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId, startedAt) }, beforePrint)
   }
   // Text targeting: the label survives re-renders that invalidate @eN refs, and
   // needs no knowledge of the page's markup.
@@ -133,7 +136,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
     const opened = recentCreatedTab(tabId, openedSince)
     return finish({
       url: meta?.url ?? '', title: meta?.title ?? '', matchedText: hit.text, matchedCount: hit.matches,
-      clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId),
+      clickedAt: { x: hit.x, y: hit.y }, clicks: taps, windowRestored: layout.restored, dialog: recentDialog(tabId, startedAt),
       ...(opened ? { newTabId: opened.id, newTabUrl: opened.url || undefined, hint: 'the click opened a new tab; it is not tracked. Use bsb_tabs use with newTabId to adopt it.' } : {}),
     }, beforePrint)
   }
@@ -152,7 +155,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
     }
     await delay(200)
     const allMeta = await pageMeta(tabId)
-    return finish({ url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId) }, beforePrint)
+    return finish({ url: allMeta?.url ?? '', title: allMeta?.title ?? '', clicked: pressed, clicks: pressed.length, matchedCount: points.length, windowRestored: layout.restored, dialog: recentDialog(tabId, startedAt) }, beforePrint)
   }
   let box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
@@ -195,7 +198,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
   return finish({
     url: meta?.url ?? '', title: meta?.title ?? '', matchedCount: matched, element: described ?? undefined,
     clickedAt: { x: box.x, y: box.y }, clicks: taps, windowRestored: layout.restored,
-    dialog: recentDialog(tabId), followed,
+    dialog: recentDialog(tabId, startedAt), followed,
     ...(opened ? { newTabId: opened.id, newTabUrl: opened.url || undefined, hint: 'the click opened a new tab; it is not tracked. Use bsb_tabs use with newTabId to adopt it.' } : {}),
   }, beforePrint)
 }
@@ -208,6 +211,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
  */
 export async function hoverPage({ target, text, x, y, frame, forceActive: forceWanted, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const startedAt = Date.now()
   const { visibility, forced } = await requireInputVisibility(tabId, 'hover', forceWanted)
   let point = null
   let frameId = null
@@ -234,7 +238,7 @@ export async function hoverPage({ target, text, x, y, frame, forceActive: forceW
   const meta = await pageMeta(tabId)
   // A null frameId is not a string, so the host tool's output schema would
   // reject the whole result. Leave the key out when the page document was hit.
-  const result = { url: meta?.url ?? '', title: meta?.title ?? '', at: point, scrolled, dialog: recentDialog(tabId), ...inputSuccess(visibility, forced) }
+  const result = { url: meta?.url ?? '', title: meta?.title ?? '', at: point, scrolled, dialog: recentDialog(tabId, startedAt), ...inputSuccess(visibility, forced) }
   if (typeof frameId === 'string' && frameId) result.frameId = frameId
   if (forced) await clearForced(tabId, forced)
   return result

@@ -106,8 +106,11 @@ single quiet rule instead of a pattern.
 | `bsb_eval` | Evaluates JavaScript and returns the value. Runs in a read-only isolated world by default; `world: "main"` opts into the page's own world. Also installs document-start scripts (`installOnNewDocument`) that run before every new document of the tab. |
 
 Every page tool accepts `frame` (a frame id, URL substring, or index) and
-`browser` (a browser id, id prefix, or label substring). `bsb_act` performs one
-action per call. The tool schemas carry the full parameter lists.
+`browser` (a browser id, id prefix, or label substring). Page tools also accept
+`tabId` to target one tab for a call; only `bsb_open` and `bsb_tabs use` change
+the tracked tab, so two agents can drive two tabs of one browser without
+retargeting each other. `bsb_act` performs one action per call. The tool schemas
+carry the full parameter lists.
 
 A bundled skill, `browser-bridge`, holds the workflow playbook: tool choice, the
 read/act/wait loop, canvas and WebGL pages, iframes, network debugging, and

@@ -1,6 +1,6 @@
 // Browser Bridge worker: lib/page-state.js.
 // Keep the module boundaries in docs/SPEC.md in sync.
-import { evaluate } from './cdp.js'
+import { evaluate, evaluateInContext } from './cdp.js'
 import { NAV_OUTCOME_MAX } from './constants.js'
 import { shared } from './state.js'
 import { documentIsHealthy } from './util.js'
@@ -17,8 +17,8 @@ import { documentIsHealthy } from './util.js'
  * status Chrome prints on its own error page, so a 429 is named without a
  * network capture armed before the navigation.
  */
-export async function pageState(tabId) {
-  return evaluate(tabId, `(() => {
+export async function pageState(tabId, contextId) {
+  const expression = `(() => {
     const body = document.body;
     const text = ((body ? body.innerText : '') || '').trim();
     const sample = text.replace(/\\s+/g, ' ');
@@ -66,7 +66,10 @@ export async function pageState(tabId) {
       errorCode: errorCode ? errorCode[1] : '',
       outer: { width: window.outerWidth || 0, height: window.outerHeight || 0 },
     };
-  })()`)
+  })()`
+  return contextId === undefined
+    ? evaluate(tabId, expression)
+    : evaluateInContext(tabId, contextId, expression)
 }
 
 /**

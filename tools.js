@@ -65,6 +65,13 @@ const browserProperty = {
     + 'Ids are hex strings and MUST be quoted — "browser": "46365621028d", never browser: 46365621028d, which is not valid JSON.',
 }
 
+const tabIdProperty = {
+  type: 'number',
+  description:
+    'Act on this tab for this call only. The tracked tab is unchanged: only bsb_open and bsb_tabs use move it. '
+    + 'Use bsb_open newTab:true to get a tabId, then pass it to read, act, wait, capture, pixels and observe so concurrent agents can drive different tabs.',
+}
+
 /** Compact one-line header view bounded so a captured request cannot flood the context. */
 const formatHeaders = (headers, max) => {
   if (!headers || typeof headers !== 'object') return ''
@@ -94,8 +101,18 @@ function renderRead(_args, value) {
   // The state line separates "loaded but empty" from "never rendered": an error
   // page, a bot-check interstitial and a splash skeleton all read as empty text.
   const state = value?.state && typeof value.state === 'object' ? value.state : undefined
+  const textCount = Number(state?.bodyTextLen) || 0
+  const shownText = typeof value?.text === 'string' ? value.text.length : 0
+  const textLabel = value?.truncated
+    ? `${textCount} chars of body text (${shownText} shown)`
+    : `${textCount} chars of body text`
+  const interactiveCount = Number(state?.interactiveCount) || 0
+  const shownElements = elements.length
+  const interactiveLabel = shownElements < interactiveCount
+    ? `${interactiveCount} interactive (${shownElements} shown)`
+    : `${interactiveCount} interactive`
   const stateLine = state
-    ? `state: ${state.readyState ?? 'unknown'} · HTTP ${state.httpStatus || 'not measured'} · ${state.bodyTextLen ?? 0} chars of body text · ${state.elementCount ?? 0} elements (${state.interactiveCount ?? 0} interactive, ${state.canvasCount ?? 0} canvas) · document ${state.visibility ?? 'unknown'}${state.hasSplash ? ` · splash ${state.splashHeight}px` : ''}`
+    ? `state: ${state.readyState ?? 'unknown'} · HTTP ${state.httpStatus || 'not measured'} · ${textLabel} · ${state.elementCount ?? 0} elements (${interactiveLabel}, ${state.canvasCount ?? 0} canvas) · document ${state.visibility ?? 'unknown'}${state.hasSplash ? ` · splash ${state.splashHeight}px` : ''}`
     : undefined
   const lines = [
     `url: ${value?.url ?? ''}`,
@@ -670,6 +687,7 @@ export function registerTools(ctx, bridge) {
       tileScale: { type: 'number', description: 'record: sheet tile scale 0.1-1.' },
       saveDir: { type: 'string', description: 'Output directory (default /tmp/bsb-shots).' },
       browser: browserProperty,
+      tabId: tabIdProperty,
     }),
     output: {
       schema: {
@@ -719,6 +737,7 @@ export function registerTools(ctx, bridge) {
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
+      const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const { mkdir, writeFile } = await import('node:fs/promises')
       const dir = (stringArg(args, 'saveDir') || '/tmp/bsb-shots').replace(/\/+$/, '')
       await mkdir(dir, { recursive: true })
@@ -732,7 +751,7 @@ export function registerTools(ctx, bridge) {
         try {
           raw = await bridge.send(
             'record',
-            {
+            { tabId,
               action: recordAction,
               selector: stringArg(args, 'selector'),
               scale: args?.scale,
@@ -787,7 +806,7 @@ export function registerTools(ctx, bridge) {
       if (kind === 'sheet') {
         const raw = await bridge.send(
           'sheet',
-          {
+          { tabId,
             selector: stringArg(args, 'selector'),
             offset: args?.offset,
             limit: args?.limit,
@@ -815,7 +834,7 @@ export function registerTools(ctx, bridge) {
         }
       }
       if (args?.native === true && stringArg(args, 'selector')) {
-        const raw = await bridge.send('imageSource', { selector: stringArg(args, 'selector'), frame: stringArg(args, 'frame') }, { browser, timeoutMs: TIMEOUT_MS })
+        const raw = await bridge.send('imageSource', { tabId, selector: stringArg(args, 'selector'), frame: stringArg(args, 'frame') }, { browser, timeoutMs: TIMEOUT_MS })
         const bytes = Buffer.from(String(raw?.base64 ?? raw?.pngBase64 ?? ''), 'base64')
         if (bytes.length === 0) throw new Error('the browser returned no image data')
         const mime = String(raw?.mime ?? '').match(/^image\/[a-z0-9.+-]+$/) ? String(raw.mime) : 'image/png'
@@ -837,7 +856,7 @@ export function registerTools(ctx, bridge) {
         if (i > 0 && interval > 0) await new Promise((resolve) => setTimeout(resolve, interval))
         last = await bridge.send(
           'screenshot',
-          {
+          { tabId,
             fullPage: args?.fullPage === true,
             selector: stringArg(args, 'selector'),
             rect: args?.rect && typeof args.rect === 'object' ? args.rect : undefined,
@@ -898,6 +917,7 @@ export function registerTools(ctx, bridge) {
       clickY: { type: 'number', description: 'Click this y when the wait matches.' },
       clickFrame: { type: 'string', description: 'Frame for the follow-up click.' },
       browser: browserProperty,
+      tabId: tabIdProperty,
     }),    output: {
       schema: {
         type: 'object',
@@ -982,6 +1002,7 @@ export function registerTools(ctx, bridge) {
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
+      const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       // A plain delay needs no page traffic at all: time-gated pages (idle
       // games, countdowns, autosave) are the common case, and polling them
       // costs a round trip per tick for nothing.
@@ -996,7 +1017,7 @@ export function registerTools(ctx, bridge) {
       }
       return bridge.send(
         'waitFor',
-        {
+        { tabId,
           selector: stringArg(args, 'selector'),
           text: stringArg(args, 'text'),
           url: stringArg(args, 'url'),
@@ -1050,6 +1071,7 @@ export function registerTools(ctx, bridge) {
       },
       scale: { type: 'number', description: 'Capture zoom before sampling, 0.5-4 (default 1).' },
       browser: browserProperty,
+      tabId: tabIdProperty,
     }, ['selector']),
     output: {
       schema: {
@@ -1122,9 +1144,10 @@ export function registerTools(ctx, bridge) {
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
+      const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       return bridge.send(
         'pixels',
-        { selector: stringArg(args, 'selector'), grid: args?.grid, scale: args?.scale, points: args?.points, radius: args?.radius },
+        { tabId, selector: stringArg(args, 'selector'), grid: args?.grid, scale: args?.scale, points: args?.points, radius: args?.radius },
         { browser: stringArg(args, 'browser'), timeoutMs: TIMEOUT_MS },
       )
     },
@@ -1199,6 +1222,7 @@ export function registerTools(ctx, bridge) {
       mimeType: { type: 'string', description: 'drop: MIME type of dropped text (default text/plain).' },
       frame: { type: 'string', description: 'Act inside this child frame: id/prefix, URL substring, or index. upload: the frame holding the file input; a cross-origin frame the tab cannot read needs x,y or a top-document trigger without frame.' },
       browser: browserProperty,
+      tabId: tabIdProperty,
     }, ['action']),
     output: {
       schema: { type: 'object', additionalProperties: true },
@@ -1206,10 +1230,11 @@ export function registerTools(ctx, bridge) {
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
+      const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const action = stringArg(args, 'action')
       const browser = stringArg(args, 'browser')
       const frame = stringArg(args, 'frame')
-      const send = (command, payload) => bridge.send(command, payload, { browser, timeoutMs: TIMEOUT_MS })
+      const send = (command, payload) => bridge.send(command, { ...payload, ...(tabId === undefined ? {} : { tabId }) }, { browser, timeoutMs: TIMEOUT_MS })
       if (action === 'click') {
         const target = stringArg(args, 'target')
         const text = stringArg(args, 'text')
@@ -1339,6 +1364,7 @@ export function registerTools(ctx, bridge) {
       until: { type: 'string', description: 'feed: JavaScript expression evaluated in the page after each read; a truthy value stops the collection with reason "until".' },
       forceActive: { type: 'boolean', description: 'feed: when the tab is hidden, hold the page lifecycle for the collection and release it afterwards (default false). Without it nothing is forced and the reply reports the hidden state.' },
       browser: browserProperty,
+      tabId: tabIdProperty,
     }),    output: {
       schema: { type: 'object', additionalProperties: true },
       render: (args, value) => {
@@ -1349,11 +1375,12 @@ export function registerTools(ctx, bridge) {
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
+      const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const mode = stringArg(args, 'mode') || 'text'
       const browser = stringArg(args, 'browser')
       const opts = { browser, timeoutMs: TIMEOUT_MS }
       if (mode === 'rows') {
-        return bridge.send('inspect', {
+        return bridge.send('inspect', { tabId,
           selector: stringArg(args, 'selector'),
           limit: args?.limit,
           offset: args?.offset,
@@ -1365,7 +1392,7 @@ export function registerTools(ctx, bridge) {
         }, opts)
       }
       if (mode === 'feed') {
-        return bridge.send('feed', {
+        return bridge.send('feed', { tabId,
           selector: stringArg(args, 'selector'),
           maxItems: clampInt(args?.maxItems, 20, 1, 200),
           scroll: args?.scroll === true,
@@ -1375,9 +1402,9 @@ export function registerTools(ctx, bridge) {
         }, opts)
       }
       if (mode === 'html') {
-        return bridge.send('html', { selector: stringArg(args, 'selector'), maxChars: args?.maxChars }, opts)
+        return bridge.send('html', { tabId, selector: stringArg(args, 'selector'), maxChars: args?.maxChars }, opts)
       }
-      return bridge.send('read', {
+      return bridge.send('read', { tabId,
         maxChars: clampInt(args?.maxChars, 6000, 200, MAX_CHARS),
         maxElements: clampInt(args?.maxElements, 60, 1, MAX_ELEMENTS),
         probe: Array.isArray(args?.probe) ? args.probe.filter((value) => typeof value === 'string').slice(0, 20) : undefined,
@@ -1405,6 +1432,7 @@ export function registerTools(ctx, bridge) {
       raf: { type: 'boolean', description: 'timeline: count frames for fps (default true).' },
       frame: { type: 'string', description: 'timeline: sample inside this child frame.' },
       browser: browserProperty,
+      tabId: tabIdProperty,
     }, ['kind']),    output: {
       schema: { type: 'object', additionalProperties: true },
       render: (args, value) => {
@@ -1432,11 +1460,12 @@ export function registerTools(ctx, bridge) {
     },
     timeoutMs: TIMEOUT_MS,
     async execute(args) {
+      const tabId = typeof args?.tabId === 'number' ? args.tabId : undefined
       const kind = stringArg(args, 'kind')
       const browser = stringArg(args, 'browser')
       const opts = { browser, timeoutMs: TIMEOUT_MS }
       if (kind === 'timeline') {
-        return bridge.send('timeline', {
+        return bridge.send('timeline', { tabId,
           selector: stringArg(args, 'selector'),
           durationMs: args?.durationMs,
           intervalMs: args?.intervalMs,
@@ -1447,7 +1476,7 @@ export function registerTools(ctx, bridge) {
       }
       const action = stringArg(args, 'action') || 'log'
       if (kind === 'network') {
-        return bridge.send('network', {
+        return bridge.send('network', { tabId,
           action,
           limit: args?.limit,
           filter: stringArg(args, 'filter'),
@@ -1455,7 +1484,7 @@ export function registerTools(ctx, bridge) {
           fields: Array.isArray(args?.fields) ? args.fields.map(String) : undefined,
         }, opts)
       }
-      if (kind === 'console') return bridge.send('console', { action, limit: args?.limit }, opts)
+      if (kind === 'console') return bridge.send('console', { tabId, action, limit: args?.limit }, opts)
       throw new Error('bsb_observe needs kind: network | console | timeline')
     },
   })

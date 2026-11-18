@@ -127,8 +127,8 @@ export function consoleArg(arg) {
  * (getBoundingClientRect, getImageData, performance.now, requestAnimationFrame)
  * is a read, so the page is never modified.
  */
-export async function timelinePage({ selector, durationMs, intervalMs, grid, raf, frame } = {}) {
-  const tabId = await requirePage()
+export async function timelinePage({ selector, durationMs, intervalMs, grid, raf, frame, tabId: hint } = {}) {
+  const tabId = await requirePage(hint)
   const sel = typeof selector === 'string' && selector.trim() ? selector.trim() : 'body'
   const duration = Math.min(Math.max(Math.round(Number(durationMs) || 1000), 100), 10000)
   const interval = Math.min(Math.max(Math.round(Number(intervalMs) || 50), 16), 1000)

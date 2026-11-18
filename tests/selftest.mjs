@@ -329,7 +329,8 @@ try {
   assert.ok(/async function preprocessPng\(/.test(workerSource), 'sw.js lost capture preprocessing')
   assert.ok(/preprocess: args\?\.preprocess/.test(toolsSource), 'bsb_capture does not forward preprocess')
   assert.ok(/preprocess: \{/.test(toolsSource), 'bsb_capture does not document preprocess')
-  console.log('ok  page-driving failure guards are pinned (attach, image maps, typing, preprocessing)')
+    assert.ok(/view\.pageX/.test(workerSource), 'a hidden selector capture starts at the viewport origin again')
+console.log('ok  page-driving failure guards are pinned (attach, image maps, typing, preprocessing)')
 
   // Recording guards. A recording that under-samples, ignores the sheet layout
   // or never says what to do next wastes a whole tool call and misleads the
@@ -837,7 +838,7 @@ try {
   assert.ok(/function rememberNav\(tabId, outcome\)/.test(workerSource), 'navigation outcomes are no longer remembered')
   assert.ok(/const navOutcome = \(tabId\) =>/.test(workerSource), 'navigation outcomes are no longer readable per tab')
   assert.ok(/const isInternalUrl = \(url\) =>/.test(workerSource), 'worker no longer recognises browser-internal pages')
-  assert.ok(/async function pageState\(tabId\)/.test(workerSource), 'worker lost the shared page-state probe')
+  assert.ok(/async function pageState\(tabId/.test(workerSource), 'worker lost the shared page-state probe')
   assert.ok(/function documentHint\(state,/.test(workerSource), 'worker lost the shell/error hint')
   assert.ok(/function stateSummary\(state\)/.test(workerSource), 'bsb_read state is not shaped from the probe')
   assert.ok(/navigated\?\.errorText/.test(workerSource), 'bsb_open drops the Page.navigate errorText')
@@ -847,7 +848,7 @@ try {
   assert.ok(/readyState: state\?\.readyState \?\? 'unknown'/.test(workerSource), 'bsb_open reply lost readyState')
   assert.ok(/bodyTextLen: Number\(state\?\.bodyTextLen\)/.test(workerSource), 'bsb_open reply lost bodyTextLen')
   assert.ok(/elementCount: Number\(state\?\.elementCount\)/.test(workerSource), 'bsb_open reply lost elementCount')
-  assert.ok(/const state = await pageState\(tabId\)\.catch/.test(workerSource), 'readPage does not probe the page state')
+  assert.ok(/const state = await pageState\(tabId, contextId\)\.catch/.test(workerSource), 'readPage does not probe the page state')
   assert.ok(/value\.state = stateSummary\(state\)/.test(workerSource), 'readPage replies lost the state block')
   assert.ok(/if \(hint\) value\.hint = hint/.test(workerSource), 'readPage replies lost the hint')
   // bsb_tabs: the real document URL and the failure markers, reload truth.
@@ -1379,6 +1380,22 @@ try {
     assert.ok(/assertFilesReadable/.test(workerSource) && /FILE_NOT_READABLE/.test(workerSource), 'upload still accepts a 0-byte attachment')
     assert.ok(/frameContextId/.test(workerSource) && !/let frameContext[^I]/.test(workerSource), 'the key frame probe still shadows frameContext')
     console.log('ok  evening-batch guards pinned (timeline, record status, sheet tiles, upload size, frame probe)')
+  }
+
+  // Per-tab reads and dialog truth (BSB-20261117-2225, 2250, 2310).
+  {
+    const readTool = toolsSource.slice(toolsSource.indexOf("name: 'bsb_read'"), toolsSource.indexOf("name: 'bsb_observe'"))
+    assert.ok(/tabId: tabIdProperty/.test(toolsSource), 'page tools lost the per-call tabId')
+    assert.ok(/tabId: tabIdProperty/.test(readTool), 'bsb_read does not accept tabId')
+    assert.ok(/bridge\.send\('read', \{ tabId/.test(readTool), 'bsb_read does not forward tabId')
+    assert.ok(/pageState\(tabId, contextId\)/.test(workerSource), 'a frame read still describes the parent document')
+    assert.ok(/shown\)/.test(toolsSource), 'a truncated read still presents its summary as the whole document')
+    assert.ok(/recentDialog\(tabId, startedAt\)/.test(workerSource), 'a click or key still echoes a dialog from an earlier call')
+    assert.ok(/DIALOG_AUTO_DISMISSED/.test(workerSource), 'a key pressed at an auto-dismissed dialog still claims success')
+    assert.ok(/view\.pageX/.test(workerSource), 'a hidden selector capture starts at the viewport origin again')
+    const keySource = await readFile(new URL('../extension/commands/input/key.js', import.meta.url), 'utf8')
+    assert.ok(/import \{ shared \}/.test(keySource), 'keyPage uses shared state without importing it')
+    console.log('ok  per-tab reads, frame state and dialog truth are pinned')
   }
 
   // LAN pairing and the dev routes are part of the host, not switches, and the

@@ -74,6 +74,9 @@ Poll rules:
   or label substring) overrides it. An unknown value is `UNKNOWN_BROWSER`, never
   a silent redirect.
 - A browser with no queue, no waiter and no activity for one hour is forgotten.
+- Every page tool accepts `tabId` for one call. It never changes the tracked tab;
+  only `bsb_open` and `bsb_tabs use` do. Two agents can drive two tabs of the
+  same browser without retargeting each other's reads.
 
 ## 6. Worker commands
 

@@ -8,6 +8,7 @@ import { clearForced, evaluate, evaluateInContext, evaluateProgram, frameContext
 import { KEY_TEXT_CAP } from '../../lib/constants.js'
 import { CANVAS_SIGNATURE_EXPR, CAR_MEASURE_EXPR, deepFindExpr, keyTextProbeExpr } from '../../lib/page.js'
 import { KEY_MAP, chordPlan, delay, fail, inputSuccess, keySpec, keyTextPrefix, recentDialog, resolveTarget } from '../../lib/util.js'
+import { shared } from '../../lib/state.js'
 
 /**
  * Decide whether a key text run really landed.
@@ -59,6 +60,32 @@ export function keyTextVerification(before, after, prefix, sent) {
 
 export async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdMs, target, modifiers, frame, forceActive: forceWanted, measure, settle, tabId: hint }) {
   const tabId = await requirePage(hint)
+  const startedAt = Date.now()
+  // Native dialogs are auto-dismissed as cancelled the moment they open, so a
+  // later Enter/Escape cannot reach them. Claiming applied:true for that key is
+  // the defect this check exists to prevent (BSB-20261117-2310).
+  const dialogKey = (() => {
+    const names = []
+    if (typeof key === 'string') names.push(key)
+    if (Array.isArray(keys)) names.push(...keys)
+    if (Array.isArray(steps)) {
+      for (const step of steps) {
+        if (typeof step?.key === 'string') names.push(step.key)
+        if (Array.isArray(step?.keys)) names.push(...step.keys)
+      }
+    }
+    return names.some((name) => /^(Enter|Escape|Esc)$/i.test(String(name)))
+  })()
+  if (dialogKey) {
+    const dialog = shared.dialogs.get(tabId)
+    if (dialog && Date.now() - dialog.at < 15000) {
+      shared.dialogs.delete(tabId)
+      throw fail(
+        'DIALOG_AUTO_DISMISSED',
+        'a modal ' + String(dialog.type || 'dialog') + ' dialog (' + JSON.stringify(String(dialog.message ?? '')) + ') was auto-dismissed as cancelled when it opened, so ' + (key || 'Enter') + ' could not reach it and nothing was sent. Native dialogs are dismissed to keep the tab responsive; use a page-controlled dialog, or read the reply of the action that opened it.',
+      )
+    }
+  }
   // A framed key run lands in the frame's document, so the probe must read that
   // document; the top page's activeElement is body and looks unmeasurable.
   // The local must not be named `frameContext`: a `let` of that name shadows the
@@ -385,7 +412,7 @@ export async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdM
   if (forced) await clearForced(tabId, forced)
   return {
     url: meta?.url ?? '', title: meta?.title ?? '', key: label, times, modifiers: chordMask, steps: stepList.length,
-    measure: measurement, until: untilResults.length ? untilResults : undefined, dialog: recentDialog(tabId),
+    measure: measurement, until: untilResults.length ? untilResults : undefined, dialog: recentDialog(tabId, startedAt),
     ...inputSuccess(visibility, forced),
   }
 }

@@ -10,9 +10,10 @@ export function recentCreatedTab(tabId, since) {
   return hit
 }
 
-export const recentDialog = (tabId) => {
+export const recentDialog = (tabId, since = 0) => {
   const dialog = shared.dialogs.get(tabId)
-  return dialog && Date.now() - dialog.at < 15000 ? dialog.message : undefined
+  if (!dialog || dialog.at < since) return undefined
+  return Date.now() - dialog.at < 15000 ? dialog.message : undefined
 }
 
 export const fail = (code, message) => Object.assign(new Error(message), { code })

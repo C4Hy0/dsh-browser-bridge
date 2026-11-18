@@ -124,7 +124,10 @@ export async function readPage({ maxChars, maxElements, probe, frame, normalize,
   // A read that returns empty text is not the same as a page with nothing to
   // say: the document may be an error page, a bot-check interstitial or a
   // splash skeleton. The state block and its hint are what separate them.
-  const state = await pageState(tabId).catch(() => null)
+  // A frame read must describe the frame, not the parent document: the state
+  // line is what tells the caller how big the document is and whether it has a
+  // canvas. Probe the same context the snapshot came from.
+  const state = await pageState(tabId, contextId).catch(() => null)
   if (state) {
     value.state = stateSummary(state)
     let outcome = navOutcome(tabId)

@@ -144,6 +144,20 @@ whose app never booted. The replies now carry that difference.
   read-only guard cannot be installed, the call fails instead of evaluating
   unguarded.
 
+## Several tabs, several agents
+
+One browser can serve several agents at once if each call names its tab.
+`bsb_open {newTab:true}` returns a `tabId`; pass that `tabId` to `bsb_read`,
+`bsb_act`, `bsb_wait_for`, `bsb_capture`, `bsb_pixels` and `bsb_observe` to keep
+the call on that tab for one call. Only `bsb_open` and `bsb_tabs use` move the
+tracked tab, so one agent's open never retargets another agent's reads.
+
+- Pin every follow-up call to the tab you opened. A read without `tabId` uses the
+  tracked tab, which another agent may have navigated.
+- If you share a browser, never rely on the tracked tab for state you opened.
+- `bsb_tabs list` shows all tabs; `bsb_tabs use` is the deliberate way to move
+  the tracker.
+
 ## Feeds and redirect resolution
 
 - `bsb_read {mode:"feed", selector:"[role=article]", maxItems:20, scroll:true,
