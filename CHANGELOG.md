@@ -8,7 +8,7 @@ version is the manifest version.
 
 ## [1.2.9] - 2026-11-19
 
-Extension 1.1.10.
+Plugin 1.2.9, extension 1.1.10.
 
 ### Added
 
