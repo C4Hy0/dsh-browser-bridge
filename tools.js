@@ -348,7 +348,24 @@ export function registerTools(ctx, bridge) {
   const ownerBridge = (exec) => {
     const owner = exec && exec.agent && typeof exec.agent.id === 'string' ? exec.agent.id : undefined
     if (!owner) return bridge
-    return { send: (method, params, options) => bridge.send(method, params, { ...(options ?? {}), owner }) }
+    return {
+      send: async (method, params, options) => {
+        try {
+          return await bridge.send(method, params, { ...(options ?? {}), owner })
+        } catch (error) {
+          // The bridge emits a typed code; the tool surface used to drop it,
+          // leaving callers unable to branch on the contract the skill teaches.
+          const message = String(error?.message ?? error)
+          const code = error?.code
+          if (typeof code === 'string' && code && !message.includes(code)) {
+            const wrapped = new Error(code + ': ' + message)
+            wrapped.code = code
+            throw wrapped
+          }
+          throw error
+        }
+      },
+    }
   }
 
   register({

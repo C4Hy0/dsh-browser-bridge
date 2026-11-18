@@ -67,8 +67,8 @@ export async function dragPage({ target, toTarget, x, y, toX, toY, frame, steps,
     const hit = await frameContext(tabId, frame)
     if (!target || !toTarget) throw fail('BAD_ARGUMENT', 'drag inside a frame needs target and toTarget selectors')
     // Resolve the destination first: scrolling it into view can move the start.
-    to = await absoluteFramePoint(tabId, hit.contextId, resolveTarget(toTarget))
-    from = await absoluteFramePoint(tabId, hit.contextId, resolveTarget(target))
+    to = await absoluteFramePoint(tabId, hit.contextId, resolveTarget(toTarget, tabId))
+    from = await absoluteFramePoint(tabId, hit.contextId, resolveTarget(target, tabId))
     frameId = hit.frame.frameId
   } else {
   from = await pagePoint(tabId, target, x, y)
@@ -113,7 +113,7 @@ export async function dropPage({ target, x, y, files, text, mimeType, frame, for
   if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
     point = { x: Number(x), y: Number(y) }
   } else if (target) {
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
     if (!box) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
     point = { x: box.x, y: box.y }

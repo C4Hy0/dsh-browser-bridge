@@ -16,7 +16,7 @@ export async function typePage({ target, text, submit, frame, forceActive: force
   }
   if (frame) {
     const { frame: hit, contextId } = await frameContext(tabId, frame)
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const where = `frame ${hit.url || hit.frameId}`
     await requireEditableTarget(tabId, selector, contextId, where)
     await clearAndType(tabId, text)
@@ -39,7 +39,7 @@ export async function typePage({ target, text, submit, frame, forceActive: force
       activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
     })
   }
-  const selector = resolveTarget(target)
+  const selector = resolveTarget(target, tabId)
   await requireEditableTarget(tabId, selector)
   // Insert as real input so every keystroke goes through the page's handlers.
   await clearAndType(tabId, text)

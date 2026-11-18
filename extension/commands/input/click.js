@@ -51,7 +51,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
       // Selector points are measured at press time, not up front: scrolling one
       // tile into view shifts every later tile, so a pre-computed coordinate can
       // land on a neighbour (the site under test auto-scrolls as it re-renders).
-      picks.push({ selector: resolveTarget(item) })
+      picks.push({ selector: resolveTarget(item, tabId) })
     }
     if (!picks.length) throw fail('TARGET_NOT_FOUND', 'targets resolved to no clickable points')
     const beforePrint = await snapshotBefore()
@@ -92,7 +92,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
     if (target) {
       // Same-origin frames can be resolved in one pass: scroll every level, then
       // sum each frame element's viewport rect. This is exact for nested frames.
-      const direct = await absoluteFramePoint(tabId, contextId, resolveTarget(target))
+      const direct = await absoluteFramePoint(tabId, contextId, resolveTarget(target, tabId))
       if (direct) { px = direct.x; py = direct.y }
     }
     if (px === undefined) {
@@ -140,7 +140,7 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
       ...(opened ? { newTabId: opened.id, newTabUrl: opened.url || undefined, hint: 'the click opened a new tab; it is not tracked. Use bsb_tabs use with newTabId to adopt it.' } : {}),
     }, beforePrint)
   }
-  const selector = resolveTarget(target)
+  const selector = resolveTarget(target, tabId)
   // Press every match in one call: dense grids of checkboxes otherwise cost one
   // tool round trip per tile.
   if (all === true) {

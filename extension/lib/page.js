@@ -253,7 +253,7 @@ export function boxOf(selector) {
   let hit = null
   try {
     const at = document.elementFromPoint(x, y)
-    hit = Boolean(at) && (at === el || el.contains(at) || at.contains(el))
+    hit = Boolean(at) && (at === el || el.contains(at))
     if (!hit && at) hit = { tag: at.tagName, id: at.id || undefined, cls: String(at.className || '').slice(0, 40) }
   } catch {}
   return { x, y, offscreen, hit }

@@ -267,7 +267,7 @@ export function typedValueDidNotLand(selector, wanted, observed) {
 export async function pagePoint(tabId, target, px, py) {
   if (Number.isFinite(Number(px)) && Number.isFinite(Number(py))) return { x: Number(px), y: Number(py) }
   if (!target) return null
-  const selector = resolveTarget(target)
+  const selector = resolveTarget(target, tabId)
   const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
   return box
@@ -360,7 +360,7 @@ export async function revealFramePath(tabId, frameId, { scroll = true } = {}) {
 /** Resolve a selector or visible text to a point inside a child frame. */
 export async function framePoint(tabId, contextId, { target, text }) {
   if (target) {
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const box = await evaluateInContext(tabId, contextId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
     return box ? { x: box.x, y: box.y } : null
   }

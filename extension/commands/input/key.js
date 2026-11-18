@@ -113,7 +113,7 @@ export async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdM
   if (typeof text === 'string' && text.length > 0
       && !key && !(Array.isArray(keys) && keys.length) && !(Array.isArray(steps) && steps.length)) {
     if (target) {
-      const selector = resolveTarget(target)
+      const selector = resolveTarget(target, tabId)
       const focused = await probeIn(`(() => { const el = ${deepFindExpr(selector)}; if (!el) return false; el.focus(); return true })()`)
       if (!focused) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
     }
@@ -217,7 +217,7 @@ export async function keyPage({ key, keys, text, keyDelayMs, steps, count, holdM
   const specs = names.map(specFor)
   const spec = specs[0]
   if (target) {
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const focused = await evaluate(tabId, `(() => { const el = ${deepFindExpr(selector)}; if (!el) return false; el.focus(); return true })()`)
     if (!focused) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
   }

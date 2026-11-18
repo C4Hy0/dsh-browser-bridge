@@ -90,7 +90,7 @@ export async function uploadPage({ target, files, frame, x, y, forceActive: forc
         + 'or press the control that opens the chooser with x,y. A same-origin frame is reachable and should not hit this error.',
       )
     }
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const found = await send(tabId, 'DOM.querySelector', { nodeId: rootNodeId, selector })
     if (!found?.nodeId) throw fail('TARGET_NOT_FOUND', `no element matches ${selector} in frame ${hit.url || hit.frameId}`)
     const node = (await send(tabId, 'DOM.describeNode', { nodeId: found.nodeId }))?.node ?? {}
@@ -110,7 +110,7 @@ export async function uploadPage({ target, files, frame, x, y, forceActive: forc
   // A target that is itself the file input needs no press: this keeps the old
   // top-document path, including its behavior on a hidden tab.
   if (target) {
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const root = await send(tabId, 'DOM.getDocument', { depth: 0, pierce: false })
     const found = await send(tabId, 'DOM.querySelector', { nodeId: root.root.nodeId, selector })
     if (found?.nodeId) {
@@ -150,7 +150,7 @@ export async function fileChooserUpload(tabId, { list, names, target, x, y, forc
   if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
     point = { x: Number(x), y: Number(y) }
   } else if (target) {
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     const box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
     if (!box) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
     if (box.offscreen) {

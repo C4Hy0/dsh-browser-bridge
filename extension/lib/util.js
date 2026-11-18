@@ -131,10 +131,15 @@ export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  */
 export const isInternalUrl = (url) => /^(chrome|edge|brave|devtools|about|view-source):/i.test(String(url ?? ''))
 
-export const resolveTarget = (target) => {
+export const resolveTarget = (target, tabId) => {
   if (typeof target !== 'string' || target.length === 0) throw fail('BAD_ARGUMENT', 'target is required')
   if (!target.startsWith('@')) return target
-  const selector = shared.refs.get(target)
+  // Refs belong to the read that produced them, and a second agent reading its
+  // own tab must not overwrite @eN for everyone else. Key the table by tab.
+  const table = tabId === undefined ? undefined : shared.refs.get(tabId)
+  const selector = table
+    ? table.get(target)
+    : [...shared.refs.values()].map((refs) => refs.get(target)).find(Boolean)
   if (!selector) throw fail('TARGET_NOT_FOUND', `${target} is no longer valid; call bsb_read again`)
   return selector
 }

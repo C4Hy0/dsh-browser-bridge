@@ -120,7 +120,7 @@ export async function readPage({ maxChars, maxElements, probe, frame, normalize,
       return out;
     })()`)
   }
-  shared.refs = new Map(value.elements.map((element) => [element.ref, element.selector]))
+  shared.refs.set(tabId, new Map(value.elements.map((element) => [element.ref, element.selector])))
   // A read that returns empty text is not the same as a page with nothing to
   // say: the document may be an error page, a bot-check interstitial or a
   // splash skeleton. The state block and its hint are what separate them.

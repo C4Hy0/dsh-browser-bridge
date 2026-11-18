@@ -14,7 +14,7 @@ import { fail, recentDialog, resolveTarget } from '../../lib/util.js'
 export async function selectOption({ target, value, label, index, frame, tabId: hint }) {
   const tabId = await requirePage(hint)
   if (!target) throw fail('BAD_ARGUMENT', 'select needs a target selector')
-  const selector = resolveTarget(target)
+  const selector = resolveTarget(target, tabId)
   const ctx = frame ? await frameContext(tabId, frame) : null
   const run = ctx
     ? (expression) => evaluateInContext(tabId, ctx.contextId, expression)
@@ -66,7 +66,7 @@ export async function selectOption({ target, value, label, index, frame, tabId: 
 export async function setControl({ target, value, checked, frame, tabId: hint }) {
   const tabId = await requirePage(hint)
   if (!target) throw fail('BAD_ARGUMENT', 'set needs a target selector')
-  const selector = resolveTarget(target)
+  const selector = resolveTarget(target, tabId)
   const arg = JSON.stringify({
     selector,
     value: value == null ? '' : String(value),

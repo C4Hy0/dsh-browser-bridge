@@ -23,6 +23,19 @@ export async function wheelPage({ x, y, deltaX, deltaY, modifiers, forceActive: 
   // A hidden tab never acks a wheel event (the compositor owns it), which used
   // to hang the command until the 30 s worker timeout. Fail in 1.5 s with the
   // recovery step instead.
+  const positionExpr = `(() => {
+    const at = document.elementFromPoint(${px}, ${py});
+    let node = at;
+    while (node && node !== document.scrollingElement) {
+      const style = getComputedStyle(node);
+      if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 2) {
+        return { y: node.scrollTop, x: node.scrollLeft, kind: 'element' };
+      }
+      node = node.parentElement;
+    }
+    return { y: scrollY, x: scrollX, kind: 'window' };
+  })()`
+  const before = await evaluate(tabId, positionExpr).catch(() => null)
   const dispatched = send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: px, y: py, deltaX: dx, deltaY: dy, modifiers: mask })
   const hidden = new Promise((_, reject) => setTimeout(
     () => reject(fail('TAB_NOT_VISIBLE', 'wheel needs the tab in front; bring it forward with bsb_tabs use, then retry')),
@@ -34,9 +47,16 @@ export async function wheelPage({ x, y, deltaX, deltaY, modifiers, forceActive: 
     if (forced) await clearForced(tabId, forced)
     throw error
   }
+  await delay(250)
+  const after = await evaluate(tabId, positionExpr).catch(() => null)
+  const scrolled = Boolean(before && after && (before.x !== after.x || before.y !== after.y))
   const meta = await pageMeta(tabId)
   if (forced) await clearForced(tabId, forced)
-  return { url: meta?.url ?? '', title: meta?.title ?? '', at: { x: px, y: py }, deltaX: dx, deltaY: dy, modifiers: mask, ...inputSuccess(visibility, forced) }
+  return {
+    url: meta?.url ?? '', title: meta?.title ?? '', at: { x: px, y: py }, deltaX: dx, deltaY: dy, modifiers: mask,
+    before, after, scrolled, ...inputSuccess(visibility, forced), applied: scrolled,
+    ...(scrolled ? {} : { reason: 'no scrollable target moved at that point; the wheel event was dispatched but nothing scrolled (a fixed overlay or a non-scrollable region)' }),
+  }
 }
 
 /** Scroll the page to x/y, or bring a selector into view. */
@@ -47,7 +67,7 @@ export async function scrollPage({ selector, x, y, frame, tabId: hint }) {
   if (frame) {
     const ctx = await frameContext(tabId, frame)
     if (typeof selector === 'string' && selector.length > 0) {
-      const sel = resolveTarget(selector)
+      const sel = resolveTarget(selector, tabId)
       const box = await evaluateInContext(tabId, ctx.contextId, `(() => {
         const el = document.querySelector(${JSON.stringify(sel)});
         if (!el) return null;

@@ -63,7 +63,7 @@ export async function pastePage({ text, target, forceActive: forceWanted, tabId:
     return { ...reply, ...inputSuccess(visibility, forced) }
   }
   if (target) {
-    const selector = resolveTarget(target)
+    const selector = resolveTarget(target, tabId)
     await requireEditableTarget(tabId, selector, undefined, undefined, 'paste')
   } else {
     // With no target the insertion goes to the focused element; if the page has

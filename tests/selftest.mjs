@@ -1428,6 +1428,16 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     console.log('ok  typed tab errors, persistent dialogs, console stop and upload truth are pinned')
   }
 
+  // Error codes, per-tab refs and a wheel that reports the page's real position.
+  {
+    assert.ok(/code \+ ': ' \+ message/.test(toolsSource), 'tool errors still drop the bridge code')
+    assert.ok(/shared\.refs\.set\(tabId/.test(workerSource), 'refs are shared across tabs again')
+    assert.ok(/resolveTarget\(target, tabId\)/.test(workerSource), 'ref resolution ignores the addressed tab')
+    assert.ok(/at === el \|\| el\.contains\(at\)/.test(workerSource) && !/at\.contains\(el\)/.test(workerSource), 'an ancestor covering the target still counts as a hit')
+    assert.ok(/scrolled/.test(workerSource) && /no scrollable target moved/.test(workerSource), 'wheel still reports success without moving')
+    console.log('ok  typed tool errors, per-tab refs and honest wheel reports are pinned')
+  }
+
   // LAN pairing and the dev routes are part of the host, not switches, and the
   // docs layout is part of the product.
   {
