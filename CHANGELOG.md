@@ -14,8 +14,8 @@ version is the manifest version.
 
 ### Changed
 
-- Release notes are the version changelog entry itself. The separate Upgrade
-  section is gone.
+- Release notes are the version changelog entry itself, in the changelog voice.
+  The separate Upgrade section is gone.
 
 ## [1.2.0] - 2026-11-17
 

@@ -47,6 +47,9 @@ notes consistent. They apply from 1.2.0 on.
   release notes are the changelog for that version, not a separate summary.
 - A release note with no matching changelog entry is an incomplete release.
 
+The body reads like the changelog: plain sentences, sentence-case headings,
+straight quotes.
+
 ## Versioning
 
 - The plugin and the extension version move independently; every release states
