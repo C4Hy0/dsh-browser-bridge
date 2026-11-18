@@ -47,8 +47,20 @@ export async function wheelPage({ x, y, deltaX, deltaY, modifiers, forceActive: 
     if (forced) await clearForced(tabId, forced)
     throw error
   }
-  await delay(250)
-  const after = await evaluate(tabId, positionExpr).catch(() => null)
+  // A wheel event is dispatched before the renderer applies its scroll; a single
+  // read after a short delay reports the previous position and marks a moving
+  // page as unscrollable. Poll until the position changes, then settle.
+  let after = null
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    await delay(100)
+    const pos = await evaluate(tabId, positionExpr).catch(() => null)
+    if (pos && before && (pos.x !== before.x || pos.y !== before.y)) {
+      await delay(80)
+      after = await evaluate(tabId, positionExpr).catch(() => pos) ?? pos
+      break
+    }
+    after = pos
+  }
   const scrolled = Boolean(before && after && (before.x !== after.x || before.y !== after.y))
   const meta = await pageMeta(tabId)
   if (forced) await clearForced(tabId, forced)

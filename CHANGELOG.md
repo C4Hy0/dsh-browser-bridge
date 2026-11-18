@@ -6,6 +6,10 @@ version is the manifest version.
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-11-19
+
+Extension 1.1.8.
+
 ### Added
 
 - `docs/RELEASING.md` with the commit, tag, release-note and changelog rules.
@@ -42,6 +46,10 @@ version is the manifest version.
   fails `DIALOG_AUTO_DISMISSED`, not just the first.
 - Console capture has `action:"stop"` with the captured count.
 - A failed upload names the 0-byte entry and the replaced previous attachment.
+- Tool errors keep the bridge's typed code; `@eN` refs are stored per tab; a
+  click covered by an overlay fails `TARGET_COVERED`; `wheel` reports the
+  scroller's before and after position and polls until the scroll lands.
+- A relative `saveTo` receipt carries the resolved absolute path.
 
 ### Changed
 

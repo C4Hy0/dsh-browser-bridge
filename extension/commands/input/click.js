@@ -159,14 +159,17 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
   }
   let box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
-  if (box.hit === false) {
+  // boxOf reports a failed hit as an object naming the element at the point, not
+  // as false; checking only for false made TARGET_COVERED unreachable and every
+  // covered click reported success (BSB-20261119-0025).
+  if (box.hit && typeof box.hit === 'object') {
     // The page moved between the measurement and the press (a sticky header, an
     // auto-scroll, a re-render). Re-measure once, then refuse.
     await delay(150)
     box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   }
-  if (box.hit === false) {
-    const at = box.hit && typeof box.hit === 'object' ? box.hit : null
+  if (box.hit && typeof box.hit === 'object') {
+    const at = box.hit
     throw fail(
       'TARGET_COVERED',
       `${selector} is at (${Math.round(box.x)},${Math.round(box.y)}) but the element at that point is `

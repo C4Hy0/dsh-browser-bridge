@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser-bridge",
-  "version": "1.2.5",
+  "version": "1.2.7",
   "type": "module",
   "description": "Drive the browser you are signed into through a paired Chromium extension: ten tools over the DevTools Protocol.",
   "exports": {

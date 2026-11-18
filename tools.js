@@ -587,7 +587,11 @@ export function registerTools(ctx, bridge) {
       const SPILL_AT = 12000
       if (!explicit && inline.length <= SPILL_AT) return raw
       const { mkdir, writeFile } = await import('node:fs/promises')
-      const target = explicit || '/tmp/bsb-eval-' + Date.now().toString(36) + '.json'
+      const { resolve } = await import('node:path')
+      // Write and report one path: a relative saveTo resolves against the host
+      // process cwd, which the caller cannot predict, so the receipt used to
+      // name a file it could not open.
+      const target = explicit ? resolve(explicit) : '/tmp/bsb-eval-' + Date.now().toString(36) + '.json'
       await mkdir(dirname(target), { recursive: true }).catch(() => undefined)
       const body = raw && typeof raw.result === 'string' ? raw.result : inline
       await writeFile(target, body)

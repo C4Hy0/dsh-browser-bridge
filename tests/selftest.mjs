@@ -1354,7 +1354,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
   // successful while the page did something else.
   {
     assert.ok(/hit = Boolean\(at\) && \(at === el/.test(workerSource), 'boxOf no longer reports whether the point hits the element')
-    assert.ok(/TARGET_COVERED/.test(workerSource) && /if \(box\.hit === false\)/.test(workerSource), 'a covered click no longer fails loudly')
+    assert.ok(/TARGET_COVERED/.test(workerSource) && /if \(box\.hit && typeof box\.hit === 'object'\)/.test(workerSource), 'a covered click no longer fails loudly')
     assert.ok(/applied: false, dispatched: true/.test(workerSource), 'a verified no-op still reports applied:true')
     assert.ok(/nextTracked/.test(workerSource) && /candidates\.find\(\(tab\) => tab\.active\)/.test(workerSource), 'closing the tracked tab no longer falls back to another tab')
     assert.ok(/inViewport: false/.test(workerSource) && /painted: false/.test(workerSource), 'pixels still returns a zero grid for an unpainted element')
@@ -1436,6 +1436,14 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/at === el \|\| el\.contains\(at\)/.test(workerSource) && !/at\.contains\(el\)/.test(workerSource), 'an ancestor covering the target still counts as a hit')
     assert.ok(/scrolled/.test(workerSource) && /no scrollable target moved/.test(workerSource), 'wheel still reports success without moving')
     console.log('ok  typed tool errors, per-tab refs and honest wheel reports are pinned')
+  }
+
+  // saveTo receipts and a wheel that waits for the renderer.
+  {
+    assert.ok(/explicit \? resolve\(explicit\)/.test(toolsSource), 'saveTo still writes a relative path it cannot name')
+    assert.ok(/attempt < 12/.test(workerSource) && /pos\.x !== before\.x \|\| pos\.y !== before\.y/.test(workerSource), 'the wheel still reads once before the scroll lands')
+    assert.ok(/box\.hit && typeof box\.hit === 'object'/.test(workerSource) && !/box\.hit === false/.test(workerSource), 'the covered click guard still compares the hit object to false')
+    console.log('ok  saveTo resolves and the wheel polls for movement')
   }
 
   // LAN pairing and the dev routes are part of the host, not switches, and the
