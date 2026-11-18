@@ -9,6 +9,7 @@ export const shared = {
   refs: new Map(),
   detachTimer: undefined,
   dialogs: new Map(),
+  uploads: new Map(),
   tabOwners: new Map(),
   injectedScripts: new Map(),
   netCaptures: new Map(),

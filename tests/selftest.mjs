@@ -1226,6 +1226,8 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     'Page.fileChooserOpened', 'Page.setInterceptFileChooserDialog',
     'Page.screencastFrame', 'Page.screencastFrameAck', 'Page.startScreencast', 'Page.stopScreencast',
     'Runtime.consoleAPICalled', 'Runtime.enable', 'Runtime.evaluate', 'Runtime.exceptionThrown',
+    // Navigation ends the dialog record; the event is read-only.
+    'Page.frameNavigated',
     // Reviewed for the forceActive escape hatch. They are the two overrides the
     // page-neutrality contract names, and they may only be reached from that
     // hatch, which the positional guard above enforces. A caller has to ask for
@@ -1444,6 +1446,8 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/attempt < 12/.test(workerSource) && /pos\.x !== before\.x \|\| pos\.y !== before\.y/.test(workerSource), 'the wheel still reads once before the scroll lands')
     assert.ok(/box\.hit && typeof box\.hit === 'object'/.test(workerSource) && !/box\.hit === false/.test(workerSource), 'the covered click guard still compares the hit object to false')
     assert.ok(/BSB-20261119-0120/.test(workerSource) && /DIALOG_STATE_UNKNOWN/.test(workerSource), 'pixels sweep or the lapsed dialog guard regressed')
+    assert.ok(/Page\.frameNavigated/.test(workerSource) && /shared\.uploads\.set/.test(workerSource), 'navigation does not clear the dialog, or uploads cannot restore')
+    assert.ok(/previous selection was restored/.test(workerSource), 'a failed upload no longer restores the last good paths')
     assert.ok(/BUSY_TIMEOUT/.test(workerSource) && /const TIMEOUT_MS = 40000/.test(toolsSource), 'timeouts no longer carry BUSY_TIMEOUT below the harness watchdog')
     console.log('ok  saveTo resolves and the wheel polls for movement')
   }

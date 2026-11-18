@@ -330,6 +330,15 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       return
     }
   }
+  if (method === 'Page.frameNavigated' && tabId != null && !params.frame?.parentId) {
+    // A reload or navigation is a new document; the old dialog record must not
+    // refuse Enter on the new page forever (BSB-20261119-0135).
+    shared.dialogs.delete(source.tabId)
+    for (const key of [...shared.uploads.keys()]) {
+      if (key.startsWith(source.tabId + ':')) shared.uploads.delete(key)
+    }
+    return
+  }
   if (method !== 'Page.javascriptDialogOpening' || tabId == null) return
   shared.dialogs.set(source.tabId, { type: params.type, message: params.message, at: Date.now() })
   rawSend(source.tabId, 'Page.handleJavaScriptDialog', { accept: false }).catch(() => undefined)

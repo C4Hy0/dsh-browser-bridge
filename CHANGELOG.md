@@ -6,9 +6,9 @@ version is the manifest version.
 
 ## [Unreleased]
 
-## [1.2.8] - 2026-11-19
+## [1.2.9] - 2026-11-19
 
-Extension 1.1.9.
+Extension 1.1.10.
 
 ### Added
 
@@ -56,6 +56,10 @@ Extension 1.1.9.
   have executed, so a caller reads the page before retrying.
 - A key pressed after a dialog record lapses fails `DIALOG_STATE_UNKNOWN` instead
   of reporting a success-shaped `applied:true`.
+- A navigation or reload ends the dialog record for that tab, so Enter works on
+  the new document.
+- A failed upload restores the last good file selection when the previous paths
+  are known, and says so in the error.
 
 ### Changed
 

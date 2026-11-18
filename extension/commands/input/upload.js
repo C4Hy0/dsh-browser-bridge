@@ -1,6 +1,7 @@
 // Browser Bridge worker: commands/input/upload.js.
 // Keep the module boundaries in docs/SPEC.md in sync.
 import { pressAt, requireInputVisibility } from './shared.js'
+import { shared } from '../../lib/state.js'
 import { requirePage } from '../tabs.js'
 import { clearForced, evaluate, evaluateInContext, frameList, guardedContext, pageMeta, resolveFrameArg, send, waitEvent } from '../../lib/cdp.js'
 import { FILE_CHOOSER_WAIT_MS } from '../../lib/constants.js'
@@ -100,10 +101,25 @@ export async function uploadPage({ target, files, frame, x, y, forceActive: forc
         `${selector} is not an <input type="file">. If it is a control that opens the chooser, call upload without frame using x,y or a top-document target.`,
       )
     }
-    await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
-    await delay(150)
+    const frameKey = tabId + ':' + selector
+    const framePrior = shared.uploads.get(frameKey)
     const context = await guardedContext(tabId, hit.frameId).catch(() => undefined)
-    await assertFilesReadable(tabId, selector, context)
+    try {
+      await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
+      await delay(150)
+      await assertFilesReadable(tabId, selector, context)
+      shared.uploads.set(frameKey, { nodeId: found.nodeId, files: list })
+    } catch (error) {
+      if (framePrior?.files?.length) {
+        try {
+          await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: framePrior.files })
+          await delay(150)
+          await assertFilesReadable(tabId, selector, context)
+          error.message += ' The previous selection was restored to ' + framePrior.files.join(', ') + '.'
+        } catch {}
+      }
+      throw error
+    }
     const meta = await pageMeta(tabId)
     return { url: meta?.url ?? '', title: meta?.title ?? '', count: list.length, files: names, via: 'frame', nodeId: found.nodeId, frameId: hit.frameId }
   }
@@ -116,9 +132,26 @@ export async function uploadPage({ target, files, frame, x, y, forceActive: forc
     if (found?.nodeId) {
       const node = (await send(tabId, 'DOM.describeNode', { nodeId: found.nodeId }))?.node ?? {}
       if (isFileInputNode(node)) {
-        await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
-        await delay(150)
-        await assertFilesReadable(tabId, selector)
+        const key = tabId + ':' + selector
+        const prior = shared.uploads.get(key)
+        try {
+          await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: list })
+          await delay(150)
+          await assertFilesReadable(tabId, selector)
+          shared.uploads.set(key, { nodeId: found.nodeId, files: list })
+        } catch (error) {
+          // The failed set has already replaced the input with 0-byte junk. If
+          // the last good paths are known, put them back before reporting.
+          if (prior?.files?.length) {
+            try {
+              await send(tabId, 'DOM.setFileInputFiles', { nodeId: found.nodeId, files: prior.files })
+              await delay(150)
+              await assertFilesReadable(tabId, selector)
+              error.message += ' The previous selection was restored to ' + prior.files.join(', ') + '.'
+            } catch {}
+          }
+          throw error
+        }
         const meta = await pageMeta(tabId)
         return { url: meta?.url ?? '', title: meta?.title ?? '', count: list.length, files: names, via: 'input', nodeId: found.nodeId }
       }
