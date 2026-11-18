@@ -258,7 +258,7 @@ node scripts/pack-extension.mjs   # write dist/browser-bridge-extension.zip with
 node tests/selftest.mjs           # transport, routing, guards, packaging
 node tests/compat-webserver.mjs   # every route under both harness webserver contracts
 node tests/tool-contract.mjs      # every tool action and the worker command it sends
-node tests/friction-contract.mjs  # the ticket validator (workspace only)
+node friction/friction-contract.mjs  # the ticket validator (workspace only)
 node tests/e2e.mjs                # every tool against tests/fixture.html (needs a browser)
 ```
 
