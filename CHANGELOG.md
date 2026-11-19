@@ -6,6 +6,17 @@ version is the manifest version.
 
 ## [Unreleased]
 
+## [1.2.10] - 2026-11-19
+
+Plugin 1.2.10, extension 1.1.10.
+
+### Fixed
+
+- The npm release rewrite replaces only the row name value, so the generated
+  `cordis.patch.yml` keeps its indentation and the DSH profile accepts the
+  package. The 1.2.9 package was rejected before install with a YAML error.
+- The README drops the project, package and plugin naming sentence.
+
 ## [1.2.9] - 2026-11-19
 
 Plugin 1.2.9, extension 1.1.10.

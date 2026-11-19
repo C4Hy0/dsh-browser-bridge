@@ -40,7 +40,7 @@ jobs:
           rsync -a --exclude node_modules --exclude .git --exclude dist ./ "$RUNNER_TEMP/npm/"
           cd "$RUNNER_TEMP/npm"
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='dsh-bsb';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
-          node -e "const fs=require('fs');let s=fs.readFileSync('cordis.patch.yml','utf8');s=s.replace(/^\s*name: 'dsh-browser-bridge'$/m, \"        name: 'dsh-bsb'\");fs.writeFileSync('cordis.patch.yml',s)"
+          node -e "const fs=require('fs');let s=fs.readFileSync('cordis.patch.yml','utf8');s=s.replace(\"name: 'dsh-browser-bridge'\", \"name: 'dsh-bsb'\");fs.writeFileSync('cordis.patch.yml',s)"
           node -e "const fs=require('fs');let s=fs.readFileSync('client.js','utf8');s=s.replace(\"id: 'dsh-browser-bridge'\", \"id: 'dsh-bsb'\");fs.writeFileSync('client.js',s)"
       - name: Pack
         working-directory: ${{ runner.temp }}/npm
