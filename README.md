@@ -23,15 +23,18 @@ observation, and script evaluation.
 
 ## Install
 
-### 1. Add the plugin
+### 1. Install the plugin
 
-Replace `web` with your DSH profile name.
+The DSH command is `add`: it installs the bundle into your profile. Replace
+`web` with your profile name.
+
+From a source checkout:
 
 ```sh
 dsh plugin --profile web add /absolute/path/to/dsh-browser-bridge
 ```
 
-The published package is also available:
+Or install the published package:
 
 ```sh
 dsh plugin --profile web add dsh-bsb
