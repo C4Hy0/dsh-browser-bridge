@@ -58,6 +58,8 @@ The popup shows Connected, and the plugin page lists the browser under Connected
 browsers. The tools are the agent's, not a user command: the agent's first call,
 `bsb_browsers`, lists the same browser.
 
+<img src="docs/images/popup-connected.png" width="360" alt="Connected Browser Bridge popup">
+
 ### The plugin page
 
 The plugin page shows the connected browsers, the extension download, and the

@@ -12,9 +12,9 @@ Plugin 1.2.10, extension 1.1.10.
 
 ### Changed
 
-- The README is rewritten for the product surface, with the current plugin page
-  screenshot, a plugin and extension updating section, an explanation of
-  `advertise`, and concrete troubleshooting.
+- The README is rewritten for the product surface, with the plugin page and
+  connected popup screenshots, a plugin and extension updating section, an
+  explanation of `advertise`, and concrete troubleshooting.
 
 ### Fixed
 
