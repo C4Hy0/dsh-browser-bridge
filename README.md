@@ -19,9 +19,6 @@ Ten tools cover reading, input, waiting, screenshots, pixel sampling, network an
 console observation, and script evaluation. The host plugin listens on one local
 port and serves the extension zip and a small dashboard on the plugin page.
 
-The project is `dsh-browser-bridge`, the npm package is `dsh-bsb`, and the DSH
-plugin id stays `browser-bridge`.
-
 ## Requirements
 
 - DeepSeek Harness with plugin rows. Both webserver route contracts used by DSH
