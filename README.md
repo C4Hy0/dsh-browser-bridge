@@ -52,18 +52,13 @@ The plugin row runs on the host. It listens on port 8791.
    into the popup and press Pair. The plugin page also has a Connect this browser
    button, which pairs the browser that shows the page.
 
-### 3. Confirm the connection
-
-The popup shows Connected, and the plugin page lists the browser under Connected
-browsers. The tools are the agent's, not a user command: the agent's first call,
-`bsb_browsers`, lists the same browser.
-
-<img src="docs/images/popup-connected.png" width="360" alt="Connected Browser Bridge popup">
-
 ### The plugin page
 
 The plugin page shows the connected browsers, the extension download, and the
-pairing link.
+pairing link. After pairing, the popup shows Connected and the browser appears
+under Connected browsers. That means the extension and the host are talking: the
+agent's tools now act on that browser. The tools are the agent's, not a user
+command.
 
 ![Browser Bridge plugin page](docs/images/plugin-page.png)
 
