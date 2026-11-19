@@ -6,6 +6,7 @@
  * never reaches npm.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 
 const fail = (message) => {
   console.error('release-check: ' + message)
@@ -46,4 +47,32 @@ if (!body.includes(manifest.version)) {
 
 const notes = arg('--notes')
 if (notes) writeFileSync(notes, body + '\n')
+
+// The release workflow publishes a rewritten npm copy: package name dsh-bsb,
+// row name dsh-bsb, client id dsh-bsb. Check that copy before publish, because
+// the 1.2.9 package was rejected by DSH for a row indentation slip.
+const packageDir = arg('--package')
+if (packageDir) {
+  const dir = resolve(packageDir)
+  const generated = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+  if (generated.name !== 'dsh-bsb') fail(`the npm package name is ${generated.name}, not dsh-bsb`)
+  if (generated.version !== version) fail(`the npm package version is ${generated.version}, not ${version}`)
+  const lines = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8').split('\n')
+  const idLine = lines.find((line) => line.includes('id: browser-bridge'))
+  const nameLine = lines.find((line) => line.includes("name: 'dsh-bsb'"))
+  if (!idLine || !/^    - id: browser-bridge$/.test(idLine)) {
+    fail(`the generated overlay row id has the wrong indentation: ${JSON.stringify(idLine)}`)
+  }
+  if (!nameLine || !/^      name: 'dsh-bsb'$/.test(nameLine)) {
+    fail(`the generated overlay row name has the wrong indentation: ${JSON.stringify(nameLine)}`)
+  }
+  const configLine = lines.find((line) => /^\s+config:$/.test(line))
+  if (!configLine || !/^      config:$/.test(configLine)) {
+    fail('the generated overlay config lost its indentation')
+  }
+  const client = readFileSync(join(dir, 'client.js'), 'utf8')
+  if (!client.includes("id: 'dsh-bsb'")) fail('the generated client.js does not register dsh-bsb')
+  console.log(`release-check: the ${version} npm package is valid`)
+}
+
 console.log(`release-check: ${tag} matches package.json ${pkg.version} and the ${version} changelog`)

@@ -10,12 +10,18 @@ version is the manifest version.
 
 Plugin 1.2.10, extension 1.1.10.
 
+### Changed
+
+- The README is rewritten for the product surface. The stale screenshot section
+  and the unused images are removed.
+
 ### Fixed
 
 - The npm release rewrite replaces only the row name value, so the generated
   `cordis.patch.yml` keeps its indentation and the DSH profile accepts the
   package. The 1.2.9 package was rejected before install with a YAML error.
-- The README drops the project, package and plugin naming sentence.
+- The release workflow checks the generated npm copy before publish: package
+  name, version, row indentation, and client id.
 
 ## [1.2.9] - 2026-11-19
 

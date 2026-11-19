@@ -1063,6 +1063,27 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     const clientId = /__ModuleLoader__\.load\(\{\s*id: '([^']+)'/.exec(clientSource)?.[1]
     assert.equal(clientId, packageName, 'client.js registers a different module id than the package name')
   }
+
+  // README surface: every local image exists, the tool list matches, the file
+  // stays short, and it does not point readers into docs/.
+  {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+    const images = [
+      ...readme.matchAll(/(?:src|srcset)="([^"]+)"/g),
+      ...readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g),
+    ].map((match) => match[1]).filter((path) => !/^https?:/i.test(path))
+    for (const path of images) {
+      assert.ok(existsSync(new URL('../' + path, import.meta.url)), `the README image does not exist: ${path}`)
+    }
+    assert.ok(!/\]\(docs\//.test(readme), 'the README links into docs/')
+    assert.ok(!/read the docs/i.test(readme), 'the README tells readers to read the docs')
+    assert.ok(!/[\u2014\u2019\u201c\u201d]/.test(readme), 'the README uses an em dash or a curly quote')
+    assert.ok(readme.split('\n').length <= 120, 'the README is longer than 120 lines')
+    const readmeTools = [...new Set([...readme.matchAll(/`(bsb_[a-z_]+)`/g)].map((match) => match[1]))].sort()
+    const sourceTools = [...new Set([...toolsSource.matchAll(/name: '(bsb_[a-z_]+)'/g)].map((match) => match[1]))].sort()
+    assert.deepEqual(readmeTools, sourceTools, 'the README tool list no longer matches the tools')
+    console.log('ok  README images, length, docs pointer and tool list are pinned')
+  }
   assert.ok(/type: 'connect', endpoint/.test(clientSource), 'the page stopped sending the exact bridge endpoint')
   assert.ok(/message\?\.endpoint/.test(workerSource), 'the worker ignores the endpoint the page sends')
   console.log('ok  pairing works from the popup too, and the page sends an exact endpoint')

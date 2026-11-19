@@ -59,19 +59,34 @@ straight quotes.
 - Patch for fixes, minor for features, major for a breaking change to the tool
   surface or the wire protocol.
 
+## Documentation
+
+- The README covers the product surface: what it is, requirements, install, the
+  tools, updating, configuration, and license. Keep it short. Do not add
+  screenshots that age, and do not add a "read the docs" pointer.
+- Every document follows the voice rule: plain sentences, sentence-case
+  headings, straight quotes, no em dashes, no puffery.
+- The selftest guards the README images, the 120-line cap, the no-docs-pointer
+  rule, and the tool list. It fails when the tool list and the registered tools
+  disagree.
+- The release check guards the npm copy: package name, version, row
+  indentation, and client module id.
+
 ## Publishing to npm
 
 - The project package is `dsh-browser-bridge`, matching the repository. That
   name is what the DSH plugin metadata resolver checks for the icon and locale
   files, and what the local row specifier uses.
 - The npm package is `dsh-bsb`. Before publishing, `.github/workflows/release.yml`
-  copies the tree to a temporary directory, sets `name` to `dsh-bsb`, and rewrites
-  the row's `name` specifier to `dsh-bsb`. The row id stays `browser-bridge`.
-  Publishing the repository tree directly would ship a package whose metadata
-  does not resolve.
+  copies the tree to a temporary directory, sets `name` to `dsh-bsb`, and
+  rewrites only the row name value to `dsh-bsb`. The row id stays
+  `browser-bridge`. Publishing the repository tree directly would ship a package
+  whose metadata does not resolve.
 - Pushing the release tag runs the workflow. It checks the tag against
-  `package.json` and `CHANGELOG.md`, then packs and publishes the dsh-bsb copy
-  with provenance.
+  `package.json` and `CHANGELOG.md`, prepares the dsh-bsb copy, runs
+  `scripts/release-check.mjs --package` on that copy, then packs and publishes it
+  with provenance. The package check fails on a wrong row indentation or a stale
+  client id, so a broken overlay never reaches npm again.
 - The workflow uses trusted publishing: npm verifies the GitHub Actions run
   through OIDC and no token is stored. The package's trusted publisher must name
   repository `C4Hy0/dsh-browser-bridge` and workflow `release.yml`.
@@ -80,12 +95,23 @@ straight quotes.
   tags use trusted publishing and the rewritten package.
 - The workflow publishes only the package. It does not create a GitHub release.
 
+## Before the tag
+
+- `npm test` passes; the selftest includes the README and npm package guards.
+- `node scripts/release-check.mjs --tag vX.Y.Z` passes.
+- The npm copy is prepared and `node scripts/release-check.mjs --tag vX.Y.Z --package <dir>`
+  passes. The release workflow runs the same check after preparing the copy.
+- CI is green on the exact commit to tag.
+- The release commit subject is `Release X.Y.Z: <headline>`.
+- The tag is annotated and its message names both versions, the headline, the
+  changelog anchor, and the CI run.
+
 ## Release procedure
 
-1. Run `npm test`.
+1. Run `npm test` and the release check.
 2. Update `CHANGELOG.md`: move Unreleased under the new version heading.
 3. Bump `package.json`, `bridge.js`, `index.js` (`HOST_BUILD` and `TOOLS_BUILD`),
-   and `extension/manifest.json`.
+   and `extension/manifest.json` when the extension changed.
 4. Sync `extension/` to both unpacked copies, removing stale files when the
    layout moved.
 5. Export, commit with the release rule, push, and wait for CI.

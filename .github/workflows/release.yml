@@ -42,6 +42,14 @@ jobs:
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='dsh-bsb';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
           node -e "const fs=require('fs');let s=fs.readFileSync('cordis.patch.yml','utf8');s=s.replace(\"name: 'dsh-browser-bridge'\", \"name: 'dsh-bsb'\");fs.writeFileSync('cordis.patch.yml',s)"
           node -e "const fs=require('fs');let s=fs.readFileSync('client.js','utf8');s=s.replace(\"id: 'dsh-browser-bridge'\", \"id: 'dsh-bsb'\");fs.writeFileSync('client.js',s)"
+      - name: Check the npm package
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          node scripts/release-check.mjs --tag "$TAG" --package "$RUNNER_TEMP/npm"
       - name: Pack
         working-directory: ${{ runner.temp }}/npm
         run: npm pack --dry-run
