@@ -654,7 +654,7 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         ctx.slots.inject('plugins.bundle.config', () =>
           ctx.slots.register(
-            { name: 'plugins.bundle.config', key: 'browser-bridge' },
+            { name: 'plugins.bundle.config', key: 'dsh-browser-bridge' },
             (props) => (props && props.view === 'page' ? h(React.Fragment, null, h(Browsers), h(Install)) : null),
           ),
         )

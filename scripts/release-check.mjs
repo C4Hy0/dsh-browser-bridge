@@ -72,6 +72,7 @@ if (packageDir) {
   }
   const client = readFileSync(join(dir, 'client.js'), 'utf8')
   if (!client.includes("id: 'dsh-bsb'")) fail('the generated client.js does not register dsh-bsb')
+  if (!client.includes("key: 'dsh-bsb'")) fail('the generated client.js card key is not dsh-bsb')
   console.log(`release-check: the ${version} npm package is valid`)
 }
 

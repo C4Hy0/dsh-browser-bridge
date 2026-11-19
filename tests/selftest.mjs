@@ -1062,6 +1062,8 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     const packageName = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).name
     const clientId = /__ModuleLoader__\.load\(\{\s*id: '([^']+)'/.exec(clientSource)?.[1]
     assert.equal(clientId, packageName, 'client.js registers a different module id than the package name')
+    const cardKey = /key: '([^']+)'/.exec(clientSource)?.[1]
+    assert.equal(cardKey, packageName, 'client.js registers the plugin page card under a different key than the package name')
   }
 
   // README surface: every local image exists, the tool list matches, the file
@@ -1075,10 +1077,10 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     for (const path of images) {
       assert.ok(existsSync(new URL('../' + path, import.meta.url)), `the README image does not exist: ${path}`)
     }
-    assert.ok(!/\]\(docs\//.test(readme), 'the README links into docs/')
+    assert.ok([...readme.matchAll(/\]\((docs\/[^)]+)\)/g)].every((match) => match[1].startsWith('docs/images/')), 'the README links into docs/ outside images')
     assert.ok(!/read the docs/i.test(readme), 'the README tells readers to read the docs')
     assert.ok(!/[\u2014\u2019\u201c\u201d]/.test(readme), 'the README uses an em dash or a curly quote')
-    assert.ok(readme.split('\n').length <= 120, 'the README is longer than 120 lines')
+    assert.ok(readme.split('\n').length <= 180, 'the README is longer than 180 lines')
     const readmeTools = [...new Set([...readme.matchAll(/`(bsb_[a-z_]+)`/g)].map((match) => match[1]))].sort()
     const sourceTools = [...new Set([...toolsSource.matchAll(/name: '(bsb_[a-z_]+)'/g)].map((match) => match[1]))].sort()
     assert.deepEqual(readmeTools, sourceTools, 'the README tool list no longer matches the tools')
@@ -1494,7 +1496,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(!/^## How a command reaches the browser/m.test(readme), 'the command path is still in README')
     assert.ok(/^## 15\. Command path/m.test(spec), 'the command path is not in SPEC')
     assert.ok(!/docs\/SPEC\.md/.test(readme), 'README links to SPEC.md again')
-    assert.ok(/github\.com\/C4Hy0\/dsh-browser-bridge/.test(readme), 'the CI badge does not point at the repository')
+    assert.ok(!/actions\/workflows\/ci\.yml\/badge\.svg/.test(readme), 'the README carries a CI badge again')
     console.log('ok  host behaviour, plugin page and docs layout pinned')
   }
 

@@ -66,7 +66,7 @@ straight quotes.
   screenshots that age, and do not add a "read the docs" pointer.
 - Every document follows the voice rule: plain sentences, sentence-case
   headings, straight quotes, no em dashes, no puffery.
-- The selftest guards the README images, the 120-line cap, the no-docs-pointer
+- The selftest guards the README images, the 180-line cap, the no-docs-pointer
   rule, and the tool list. It fails when the tool list and the registered tools
   disagree.
 - The release check guards the npm copy: package name, version, row

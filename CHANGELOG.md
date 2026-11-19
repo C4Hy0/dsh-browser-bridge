@@ -12,8 +12,9 @@ Plugin 1.2.10, extension 1.1.10.
 
 ### Changed
 
-- The README is rewritten for the product surface. The stale screenshot section
-  and the unused images are removed.
+- The README is rewritten for the product surface, with the current plugin page
+  screenshot, a plugin and extension updating section, an explanation of
+  `advertise`, and concrete troubleshooting.
 
 ### Fixed
 
@@ -22,6 +23,8 @@ Plugin 1.2.10, extension 1.1.10.
   package. The 1.2.9 package was rejected before install with a YAML error.
 - The release workflow checks the generated npm copy before publish: package
   name, version, row indentation, and client id.
+- The plugin page card registers under the package name, so the Browser
+  extension and Connected browsers cards appear after the project rename.
 
 ## [1.2.9] - 2026-11-19
 
