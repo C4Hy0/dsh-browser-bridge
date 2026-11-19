@@ -25,8 +25,10 @@ observation, and script evaluation.
 
 ### 1. Install the plugin
 
-The DSH command is `add`: it installs the bundle into your profile. Replace
-`web` with your profile name.
+The DSH command is `add`: it installs the bundle into a DSH profile. The
+examples use `web`, the profile that `dsh web` boots. If you use another profile,
+use its name; the profiles are the directories under `$DSH_HOME/profiles`. The
+DSH desktop app uses `desktop`.
 
 From a source checkout:
 
