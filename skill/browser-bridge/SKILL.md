@@ -157,6 +157,10 @@ tracked tab, so one agent's open never retargets another agent's reads.
 - If you share a browser, never rely on the tracked tab for state you opened.
 - `bsb_tabs list` shows all tabs; `bsb_tabs use` is the deliberate way to move
   the tracker.
+- Close the tabs you opened when the work is done, with
+  `bsb_tabs {action:"close", tabId:<id>}`. Leave one open only when you are
+  presenting it to the user, and name it. Never close a tab you did not open;
+  the user's tabs are off limits.
 
 ## Feeds and redirect resolution
 
@@ -357,8 +361,9 @@ tracked tab, so one agent's open never retargets another agent's reads.
 - Drive pages through their own controls. Do not inject DOM/CSS or patch page
   state except inside the guarded `bsb_eval` read paths, and only when the task
   is a benchmark/demo target where that is allowed.
-- Leave the tracked page and tabs as the user had them; close only tabs you
-  opened for the task.
+- Leave the user's tabs and tracked page as they were, and never close a tab you
+  did not open. Close the tabs you opened when the task is done, unless you are
+  leaving one open to present to the user.
 
 ## Token discipline
 

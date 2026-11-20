@@ -12,6 +12,9 @@ Plugin 1.2.10, extension 1.1.10.
 
 ### Changed
 
+- The browser-bridge skill tells the agent to close the tabs it opened when the
+  work is done, unless it is presenting one to the user, and never to close a
+  user's tab.
 - The README is rewritten for the product surface, with the plugin page
   screenshot, a plugin and extension updating section, an explanation of
   `advertise`, and concrete troubleshooting.
