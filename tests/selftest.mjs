@@ -1070,6 +1070,20 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.equal(cardKey, packageName, 'client.js registers the plugin page card under a different key than the package name')
   }
 
+  // Ticket batch 2026-11-20: text and selector targeting, post-action state.
+  {
+    assert.ok(/export function textPoint\(wantedRaw\)/.test(workerSource), 'text targeting lost the normalizing helper')
+    assert.ok(/textPointExpr/.test(workerSource), 'findTextPoint no longer uses the text helper')
+    assert.ok(/byLabel/.test(workerSource) && /viaAncestor/.test(workerSource), 'text targeting lost the accessible-name or own-icon path')
+    assert.ok(/behavior: 'instant'/.test(workerSource), 'text or selector targeting scrolls with an animation again')
+    assert.ok(/rendered === 0/.test(workerSource) && /matchedCount/.test(workerSource), 'selector targeting lost the zero-size handling')
+    assert.ok(/checkedAfter/.test(workerSource), 'set still reports the pre-write state')
+    assert.ok(/tabId: \{ type: 'number', description: 'Navigate this tab/.test(toolsSource), 'bsb_open tabId is missing from the schema')
+    assert.ok(/positive scrolls down/.test(toolsSource), 'the wheel sign description is wrong')
+    assert.ok(/const TIMEOUT_MS = 35000/.test(toolsSource), 'the tool timeout still races the harness watchdog')
+    console.log('ok  text and selector targeting, post-action state and tool contracts are pinned')
+  }
+
   // README surface: every local image exists, the tool list matches, the file
   // stays short, and it does not point readers into docs/.
   {
@@ -1382,7 +1396,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
   // Guards from the 2026-11-17 fleet batch. Each one is a reply that looked
   // successful while the page did something else.
   {
-    assert.ok(/hit = Boolean\(at\) && \(at === el/.test(workerSource), 'boxOf no longer reports whether the point hits the element')
+    assert.ok(/hit = Boolean\(at\) && \(at === pick\.el/.test(workerSource), 'boxOf no longer reports whether the point hits the element')
     assert.ok(/TARGET_COVERED/.test(workerSource) && /if \(box\.hit && typeof box\.hit === 'object'\)/.test(workerSource), 'a covered click no longer fails loudly')
     assert.ok(/applied: false, dispatched: true/.test(workerSource), 'a verified no-op still reports applied:true')
     assert.ok(/nextTracked/.test(workerSource) && /candidates\.find\(\(tab\) => tab\.active\)/.test(workerSource), 'closing the tracked tab no longer falls back to another tab')
@@ -1462,7 +1476,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/code \+ ': ' \+ message/.test(toolsSource), 'tool errors still drop the bridge code')
     assert.ok(/shared\.refs\.set\(tabId/.test(workerSource), 'refs are shared across tabs again')
     assert.ok(/resolveTarget\(target, tabId\)/.test(workerSource), 'ref resolution ignores the addressed tab')
-    assert.ok(/at === el \|\| el\.contains\(at\)/.test(workerSource) && !/at\.contains\(el\)/.test(workerSource), 'an ancestor covering the target still counts as a hit')
+    assert.ok(/at === pick\.el \|\| pick\.el\.contains\(at\)/.test(workerSource) && !/at\.contains\(pick\.el\)/.test(workerSource), 'an ancestor covering the target still counts as a hit')
     assert.ok(/scrolled/.test(workerSource) && /no scrollable target moved/.test(workerSource), 'wheel still reports success without moving')
     console.log('ok  typed tool errors, per-tab refs and honest wheel reports are pinned')
   }
@@ -1475,7 +1489,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/BSB-20261119-0120/.test(workerSource) && /DIALOG_STATE_UNKNOWN/.test(workerSource), 'pixels sweep or the lapsed dialog guard regressed')
     assert.ok(/Page\.frameNavigated/.test(workerSource) && /shared\.uploads\.set/.test(workerSource), 'navigation does not clear the dialog, or uploads cannot restore')
     assert.ok(/previous selection was restored/.test(workerSource), 'a failed upload no longer restores the last good paths')
-    assert.ok(/BUSY_TIMEOUT/.test(workerSource) && /const TIMEOUT_MS = 40000/.test(toolsSource), 'timeouts no longer carry BUSY_TIMEOUT below the harness watchdog')
+    assert.ok(/BUSY_TIMEOUT/.test(workerSource) && /const TIMEOUT_MS = 35000/.test(toolsSource), 'timeouts no longer carry BUSY_TIMEOUT below the harness watchdog')
     console.log('ok  saveTo resolves and the wheel polls for movement')
   }
 

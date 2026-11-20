@@ -17,9 +17,9 @@ const lossless = (value) => String(value).replace(/[\uD800-\uDBFF](?![\uDC00-\uD
 
 const MAX_CHARS = 30000
 const MAX_ELEMENTS = 200
-// Below the harness's 45 s tool watchdog, so the typed BUSY_TIMEOUT wins
+// Below the harness's 40 s tool watchdog, so the typed BUSY_TIMEOUT wins
 // instead of a bare "tool call timed out" whose effect may already have landed.
-const TIMEOUT_MS = 40000
+const TIMEOUT_MS = 35000
 
 const input = (properties, required = []) => ({
   type: 'object',
@@ -70,8 +70,8 @@ const browserProperty = {
 const tabIdProperty = {
   type: 'number',
   description:
-    'Act on this tab for this call only. The tracked tab is unchanged: only bsb_open and bsb_tabs use move it. '
-    + 'Use bsb_open newTab:true to get a tabId, then pass it to read, act, wait, capture, pixels and observe so concurrent agents can drive different tabs.',
+    'Act on this tab for this call only. The tracked tab is unchanged. bsb_open with tabId navigates that tab in place; '
+    + 'bsb_open without tabId and bsb_tabs use move the tracker. Pass the tabId from bsb_open to read, act, wait, capture, pixels and observe so concurrent agents can drive different tabs.',
 }
 
 /** Compact one-line header view bounded so a captured request cannot flood the context. */
@@ -620,11 +620,12 @@ export function registerTools(ctx, bridge) {
   register({
     name: 'bsb_open',
     description:
-      'Open a URL and make it the tracked page. Use for a URL the user gives you; the tracked tab is reused unless newTab:true, and a new tab opens in the background unless activate:true. If the page is already open, adopt it with bsb_tabs instead of opening another.',
+      'Open a URL and make it the tracked page. Use for a URL the user gives you; the tracked tab is reused unless newTab:true, and a new tab opens in the background unless activate:true. Pass tabId to navigate that tab in place instead; newTab is ignored then. If the page is already open, adopt it with bsb_tabs instead of opening another.',
     parameters: input({
       url: { type: 'string', description: 'Absolute http(s) URL to load.' },
-      newTab: { type: 'boolean', description: 'Open a separate tab instead of reusing the browser’s tracked one. Defaults to false.' },
+      newTab: { type: 'boolean', description: 'Open a separate tab instead of reusing the browser’s tracked one. Defaults to false. Ignored when tabId is set.' },
       activate: { type: 'boolean', description: 'Bring the opened tab forward. Defaults to false: a page opened for automation must not raise the window or steal the active tab.' },
+      tabId: { type: 'number', description: 'Navigate this tab in place instead of the tracked tab. newTab is ignored when this is set.' },
       browser: browserProperty,
     }, ['url']),
     output: {
@@ -1211,7 +1212,7 @@ export function registerTools(ctx, bridge) {
       x: { type: 'number', description: 'Viewport CSS x (game coordinate for drive; upload: the point that opens the file chooser).' },
       y: { type: 'number', description: 'Viewport CSS y (game coordinate for drive; upload: the point that opens the file chooser).' },
       deltaX: { type: 'number', description: 'wheel: horizontal delta (about 100 per notch).' },
-      deltaY: { type: 'number', description: 'wheel: vertical delta (negative scrolls down).' },
+      deltaY: { type: 'number', description: 'wheel: vertical delta (positive scrolls down, negative scrolls up).' },
       toTarget: { type: 'string', description: 'drag: drop target.' },
       toX: { type: 'number', description: 'drag: drop x.' },
       toY: { type: 'number', description: 'drag: drop y.' },

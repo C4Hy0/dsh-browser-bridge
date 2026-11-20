@@ -159,6 +159,15 @@ export async function clickPage({ target, text, x, y, frame, count, targets, all
   }
   let box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
   if (!box) throw fail('TARGET_NOT_FOUND', `no clickable element matches ${selector}`)
+  if (box.rendered === 0) {
+    throw fail('TARGET_NOT_FOUND', `${selector} matches ${box.matchedCount} node(s) but none has a rendered box; the matches are hidden or zero-size. Re-read the page for the live element.`)
+  }
+  if (box.scrolled) {
+    // The scroll moved the page under the measured point. Re-measure after it
+    // settles so the press uses the post-scroll centre, not the old one.
+    await delay(120)
+    box = await evaluate(tabId, `(${boxOf.toString()})(${JSON.stringify(selector)})`)
+  }
   // boxOf reports a failed hit as an object naming the element at the point, not
   // as false; checking only for false made TARGET_COVERED unreachable and every
   // covered click reported success (BSB-20261119-0025).

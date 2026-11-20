@@ -2,7 +2,7 @@
 // Keep the module boundaries in docs/SPEC.md in sync.
 import { contextForFrame, evaluate, evaluateInContext, forceActive, frameChain, pageMeta, send, waitEvent, waitReady } from '../../lib/cdp.js'
 import { HIDDEN_HINT, OFFSCREEN_EDITOR_HINT, PASTE_OFFSCREEN_HINT } from '../../lib/constants.js'
-import { ACTIVE_ELEMENT_EXPR, PAGE_FINGERPRINT_EXPR, boxOf, deepFindExpr, editableTargetExpr, mapAreaAt, ownerRectExpr, textCandidatesExpr } from '../../lib/page.js'
+import { ACTIVE_ELEMENT_EXPR, PAGE_FINGERPRINT_EXPR, boxOf, deepFindExpr, editableTargetExpr, mapAreaAt, ownerRectExpr, textCandidatesExpr, textPointExpr } from '../../lib/page.js'
 import { pageVisibility } from '../../lib/page-state.js'
 import { delay, describePage, fail, recentDialog, resolveTarget } from '../../lib/util.js'
 
@@ -17,48 +17,7 @@ import { delay, describePage, fail, recentDialog, resolveTarget } from '../../li
 export async function findTextPoint(tabId, text) {
   const wanted = String(text ?? '').trim()
   if (!wanted) throw fail('BAD_ARGUMENT', 'text must not be empty')
-  const found = await evaluate(tabId, `(() => {
-    const want = ${JSON.stringify(wanted)}.toLowerCase();
-    const collect = (root, out) => {
-      out.push(...root.querySelectorAll('button, a, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="radio"], input[type="submit"], input[type="button"], input[type="reset"], label, summary, li, span, p, div, td, th, dt, dd, strong, em, b, i, h1, h2, h3, h4, h5, h6'));
-      for (const host of root.querySelectorAll('*')) if (host.shadowRoot) collect(host.shadowRoot, out);
-      return out;
-    };
-    const nodes = collect(document, []);
-    // Generic containers are matched only when they are leaf-like: a section that
-    // merely wraps the real control must never win over the control itself.
-    const generic = new Set(['DIV', 'P', 'LI', 'SPAN', 'TD', 'TH', 'DT', 'DD', 'STRONG', 'EM', 'B', 'I', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
-    const out = [];
-    for (const el of nodes) {
-      if (el.getClientRects().length === 0 && getComputedStyle(el).position !== 'fixed') continue;
-      const raw = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
-      if (!raw) continue;
-      if (generic.has(el.tagName) && (raw.length > 160 || el.querySelector('button, a, input, select, textarea, [role="button"]'))) continue;
-      const lower = raw.toLowerCase();
-      if (lower !== want && !lower.includes(want)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) continue;
-      out.push({ el, text: raw.slice(0, 80), area: r.width * r.height, exact: lower === want, visible: r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth });
-    }
-    if (!out.length) return null;
-    out.sort((a, b) => (b.exact - a.exact) || (b.visible - a.visible) || (a.area - b.area));
-    const best = out[0];
-    let r = best.el.getBoundingClientRect();
-    let scrolled = false;
-    if (!best.visible) {
-      best.el.scrollIntoView({ block: 'center', inline: 'center' });
-      r = best.el.getBoundingClientRect();
-      scrolled = true;
-    }
-    const x = r.x + r.width / 2;
-    const y = r.y + r.height / 2;
-    let hit = null;
-    try {
-      const at = document.elementFromPoint(x, y);
-      hit = Boolean(at) && (at === best.el || best.el.contains(at) || at.contains(best.el));
-    } catch {}
-    return { x, y, text: best.text, scrolled, matches: out.length, hit };
-  })()`)
+  const found = await evaluate(tabId, textPointExpr(wanted))
   if (!found) throw textNotClickable(await evaluate(tabId, textCandidatesExpr(wanted)).catch(() => null), wanted)
   return found
 }

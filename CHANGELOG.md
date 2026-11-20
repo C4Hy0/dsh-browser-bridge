@@ -6,6 +6,25 @@ version is the manifest version.
 
 ## [Unreleased]
 
+### Fixed
+
+- Text clicks normalize whitespace across child blocks, match the accessible
+  name as well as the visible text, scroll the target into view with an instant
+  scroll before measuring, and accept a hit inside the control's own icon or
+  wrapper. The reply reports the post-scroll point.
+- Selector targets skip zero-size duplicates, scroll the rendered match into
+  view, report `matchedCount`, and re-measure after the scroll before pressing.
+- `bsb_act scroll` reports the post-action offset and element box (`scrolled`,
+  `before`), not the pre-action values.
+- `bsb_act set` reports the settled `checked`/`value` state, with
+  `checkedBefore`/`checkedAfter` when the control is a checkbox.
+- `bsb_open` exposes `tabId` in its schema and documents that it navigates that
+  tab in place and ignores `newTab`.
+- The wheel `deltaY` description matches the behaviour: positive scrolls down,
+  negative scrolls up.
+- The tool timeout is 35 s, below the harness watchdog, so a slow call returns
+  the typed `BUSY_TIMEOUT` instead of a bare tool timeout.
+
 ## [1.2.10] - 2026-11-20
 
 Plugin 1.2.10, extension 1.1.10.

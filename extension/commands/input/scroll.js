@@ -3,7 +3,6 @@
 import { requireInputVisibility } from './shared.js'
 import { requirePage } from '../tabs.js'
 import { clearForced, evaluate, evaluateInContext, frameContext, frameOrigin, pageMeta, send } from '../../lib/cdp.js'
-import { deepFindExpr } from '../../lib/page.js'
 import { delay, fail, inputSuccess, resolveTarget } from '../../lib/util.js'
 
 export async function wheelPage({ x, y, deltaX, deltaY, modifiers, forceActive: forceWanted, tabId: hint }) {
@@ -76,43 +75,59 @@ export async function scrollPage({ selector, x, y, frame, tabId: hint }) {
   const tabId = await requirePage(hint)
   const pointX = Number.isFinite(Number(x)) ? Number(x) : null
   const pointY = Number.isFinite(Number(y)) ? Number(y) : null
+  const targetExpr = (sel) => `(() => {
+    const matches = [];
+    const collect = (root) => {
+      for (const el of root.querySelectorAll(${JSON.stringify(sel)})) matches.push(el);
+      for (const host of root.querySelectorAll('*')) if (host.shadowRoot) collect(host.shadowRoot);
+    };
+    try { collect(document) } catch { return { matchedCount: 0, rendered: 0 }; }
+    const rendered = matches.map((el) => ({ el, r: el.getBoundingClientRect() })).filter((entry) => entry.r.width >= 2 && entry.r.height >= 2);
+    if (!rendered.length) return { matchedCount: matches.length, rendered: 0, scrolled: false, reason: 'all matches are zero-size or hidden' };
+    const visible = rendered.find(({ r }) => r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth);
+    const pick = visible || rendered[0];
+    const before = { x: Math.round(scrollX), y: Math.round(scrollY) };
+    pick.el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const r = pick.el.getBoundingClientRect();
+    return {
+      matchedCount: matches.length, rendered: rendered.length, before,
+      scrollX: Math.round(scrollX), scrollY: Math.round(scrollY),
+      x: r.left + r.width / 2, y: r.top + r.height / 2,
+      scrolled: before.x !== Math.round(scrollX) || before.y !== Math.round(scrollY),
+      pageHeight: document.documentElement.scrollHeight,
+    };
+  })()`
   if (frame) {
     const ctx = await frameContext(tabId, frame)
     if (typeof selector === 'string' && selector.length > 0) {
       const sel = resolveTarget(selector, tabId)
-      const box = await evaluateInContext(tabId, ctx.contextId, `(() => {
-        const el = document.querySelector(${JSON.stringify(sel)});
-        if (!el) return null;
-        el.scrollIntoView({ block: 'center', inline: 'center' });
-        const r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), pageHeight: document.documentElement.scrollHeight };
-      })()`)
-      if (!box) throw fail('TARGET_NOT_FOUND', `no element matches ${selector} inside the frame`)
+      const box = await evaluateInContext(tabId, ctx.contextId, targetExpr(sel))
+      if (!box || box.matchedCount === 0) throw fail('TARGET_NOT_FOUND', `no element matches ${selector} inside the frame`)
+      if (box.rendered === 0) return { frameId: ctx.frame.frameId, ...box }
       const origin = await frameOrigin(tabId, ctx.frame.frameId)
       return { frameId: ctx.frame.frameId, ...box, pageX: origin.x + box.x, pageY: origin.y + box.y }
     }
+    const before = await evaluateInContext(tabId, ctx.contextId, '({ x: Math.round(window.scrollX), y: Math.round(window.scrollY) })')
     const pos = await evaluateInContext(tabId, ctx.contextId, `(() => {
       window.scrollTo(${pointX ?? 'window.scrollX'}, ${pointY ?? 'window.scrollY'});
-      return { scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), pageHeight: document.documentElement.scrollHeight };
+      return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), pageHeight: document.documentElement.scrollHeight };
     })()`)
     await delay(100)
-    return { frameId: ctx.frame.frameId, ...pos }
+    const after = await evaluateInContext(tabId, ctx.contextId, '({ x: Math.round(window.scrollX), y: Math.round(window.scrollY) })')
+    return { frameId: ctx.frame.frameId, before, after, scrollX: after.x, scrollY: after.y, moved: before.x !== after.x || before.y !== after.y, pageHeight: pos.pageHeight }
   }
   if (typeof selector === 'string' && selector.length > 0) {
-    const box = await evaluate(tabId, `(() => {
-      const el = ${deepFindExpr(selector)};
-      if (!el) return null;
-      el.scrollIntoView({ block: 'center', inline: 'center' });
-      const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2, scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY) };
-    })()`)
-    if (!box) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
+    const sel = resolveTarget(selector, tabId)
+    const box = await evaluate(tabId, targetExpr(sel))
+    if (!box || box.matchedCount === 0) throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
     return box
   }
+  const before = await evaluate(tabId, '({ x: Math.round(window.scrollX), y: Math.round(window.scrollY) })')
   const pos = await evaluate(tabId, `(() => {
     window.scrollTo(${pointX ?? 'window.scrollX'}, ${pointY ?? 'window.scrollY'});
-    return { scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), pageHeight: document.documentElement.scrollHeight };
+    return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), pageHeight: document.documentElement.scrollHeight };
   })()`)
   await delay(100)
-  return pos
+  const after = await evaluate(tabId, '({ x: Math.round(window.scrollX), y: Math.round(window.scrollY) })')
+  return { before, after, scrollX: after.x, scrollY: after.y, moved: before.x !== after.x || before.y !== after.y, pageHeight: pos.pageHeight }
 }

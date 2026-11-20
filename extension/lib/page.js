@@ -213,51 +213,152 @@ export function deepFindExpr(selector) {
 }
 
 export function boxOf(selector) {
-  const el = document.querySelector(selector) ?? (() => {
-    const walk = (sel, root) => {
-      const direct = root.querySelector(sel);
-      if (direct) return direct;
-      for (const node of root.querySelectorAll('*')) {
-        if (!node.shadowRoot) continue;
-        const inner = walk(sel, node.shadowRoot);
-        if (inner) return inner;
-      }
-      return null;
-    };
-    return walk(selector, document);
-  })()
-  if (!el) return null
-  // `behavior: 'instant'` is not a nicety. Pages that set
-  // `html { scroll-behavior: smooth }` turn a plain scrollIntoView into an
-  // animation that returns immediately, so the rect measured on the next line is
-  // still the pre-scroll one and the press lands offscreen — silently, because a
-  // click outside the viewport is a no-op rather than an error.
-  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
-  let rect = el.getBoundingClientRect()
-  if (rect.bottom > innerHeight || rect.top < 0 || rect.right > innerWidth || rect.left < 0) {
-    // Belt and braces for a container that swallowed the scroll: move the window
-    // to the element ourselves, then re-measure.
-    window.scrollBy(0, rect.top - innerHeight / 2 + rect.height / 2)
-    rect = el.getBoundingClientRect()
+  const matches = []
+  const collect = (root) => {
+    const found = root.querySelectorAll(selector)
+    for (const node of found) matches.push(node)
+    for (const node of root.querySelectorAll('*')) {
+      if (node.shadowRoot) collect(node.shadowRoot)
+    }
   }
-  if (rect.width <= 0 || rect.height <= 0) return null
-  // If it still is not visible, say so instead of pressing empty space: a click
-  // outside the viewport is a silent no-op, which reads as "the page ignored me".
+  try { collect(document) } catch { return null }
+  if (!matches.length) return null
+  const rendered = []
+  for (const el of matches) {
+    const r = el.getBoundingClientRect()
+    if (r.width >= 2 && r.height >= 2) rendered.push({ el, r })
+  }
+  // Zero-size duplicates are common in responsive controls: pick the rendered
+  // one, not the first DOM match.
+  if (!rendered.length) return { matchedCount: matches.length, rendered: 0 }
+  const px = Math.round(window.scrollX)
+  const py = Math.round(window.scrollY)
+  const visible = rendered.find(({ r }) => r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth)
+  const pick = visible || rendered[0]
+  pick.el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
+  let rect = pick.el.getBoundingClientRect()
+  if (rect.bottom > innerHeight || rect.top < 0 || rect.right > innerWidth || rect.left < 0) {
+    window.scrollBy(0, rect.top - innerHeight / 2 + rect.height / 2)
+    rect = pick.el.getBoundingClientRect()
+  }
+  if (rect.width <= 0 || rect.height <= 0) return { matchedCount: matches.length, rendered: rendered.length }
   const offscreen = rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth
   const x = rect.left + rect.width / 2
   const y = rect.top + rect.height / 2
-  // A point can be inside the viewport and still not be the element: a sticky
-  // header, an overlay, or a page that scrolled back after the measurement puts
-  // something else there. Pressing it anyway is a silent no-op reported as
-  // applied, so say whether the point really hits.
   let hit = null
   try {
     const at = document.elementFromPoint(x, y)
-    hit = Boolean(at) && (at === el || el.contains(at))
+    hit = Boolean(at) && (at === pick.el || pick.el.contains(at))
     if (!hit && at) hit = { tag: at.tagName, id: at.id || undefined, cls: String(at.className || '').slice(0, 40) }
   } catch {}
-  return { x, y, offscreen, hit }
+  const moved = px !== Math.round(window.scrollX) || py !== Math.round(window.scrollY)
+    || pick.r.top !== rect.top || pick.r.left !== rect.left
+  return { x, y, offscreen, hit, matchedCount: matches.length, rendered: rendered.length, scrolled: moved }
 }
+
+/**
+ * Pick the element for a click by text.
+ *
+ * The rendered text is normalized across child blocks, the accessible name
+ * (aria-label, aria-labelledby, title, alt) is a match as well, the element is
+ * scrolled with an instant scroll before the point is measured, and a hit on a
+ * sibling inside a matching wrapper (the control's own icon) counts as the
+ * target. Returns the post-scroll viewport centre.
+ */
+export function textPoint(wantedRaw) {
+  const norm = (value) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
+  const want = norm(wantedRaw).toLowerCase()
+  const skip = new Set(['HTML', 'BODY', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'META', 'LINK', 'TITLE'])
+  const generic = new Set(['DIV', 'P', 'LI', 'SPAN', 'TD', 'TH', 'DT', 'DD', 'STRONG', 'EM', 'B', 'I', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'])
+  const collect = (root, out) => {
+    out.push(...root.querySelectorAll('button, a, [role="button"], [role="link"], [role="tab"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="option"], input[type="submit"], input[type="button"], input[type="reset"], label, summary, li, span, p, div, td, th, dt, dd, strong, em, b, i, h1, h2, h3, h4, h5, h6'))
+    for (const host of root.querySelectorAll('*')) if (host.shadowRoot) collect(host.shadowRoot, out)
+    return out
+  }
+  const labelOf = (el) => {
+    const aria = el.getAttribute && el.getAttribute('aria-label')
+    if (aria) return norm(aria)
+    const labelled = el.getAttribute && el.getAttribute('aria-labelledby')
+    if (labelled) {
+      const text = labelled.split(/\s+/).map((id) => {
+        const node = document.getElementById(id)
+        return node ? norm(node.innerText || node.textContent) : ''
+      }).join(' ')
+      if (text) return norm(text)
+    }
+    const title = el.getAttribute && el.getAttribute('title')
+    if (title) return norm(title)
+    if (el.tagName === 'IMG' && el.alt) return norm(el.alt)
+    return ''
+  }
+  const visible = (r) => r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth
+  const nodes = collect(document, [])
+  const out = []
+  for (const el of nodes) {
+    if (skip.has(el.tagName)) continue
+    const text = norm(el.innerText || '')
+    const label = labelOf(el)
+    const value = el.value == null ? '' : norm(el.value)
+    const byText = text.toLowerCase().includes(want)
+    const byLabel = label !== '' && label.toLowerCase().includes(want)
+    const byValue = value !== '' && value.toLowerCase().includes(want)
+    if (!byText && !byLabel && !byValue) continue
+    if (generic.has(el.tagName) && (text.length > 160 || el.querySelector('button, a, input, select, textarea, [role="button"], [role="link"]'))) continue
+    const r = el.getBoundingClientRect()
+    if (r.width < 2 || r.height < 2) continue
+    out.push({
+      el, text, label, byLabel, byText, byValue,
+      area: r.width * r.height,
+      exact: text.toLowerCase() === want || label.toLowerCase() === want || value.toLowerCase() === want,
+      visible: visible(r),
+    })
+  }
+  if (!out.length) return null
+  out.sort((a, b) => (b.exact - a.exact) || (b.visible - a.visible) || (a.area - b.area))
+  const best = out[0]
+  let r = best.el.getBoundingClientRect()
+  let scrolled = false
+  if (!best.visible) {
+    best.el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
+    r = best.el.getBoundingClientRect()
+    scrolled = true
+  }
+  const x = r.left + r.width / 2
+  const y = r.top + r.height / 2
+  let hit = false
+  let viaAncestor = false
+  let cover = null
+  try {
+    const at = document.elementFromPoint(x, y)
+    hit = Boolean(at) && (at === best.el || best.el.contains(at))
+    if (!hit && at) {
+      let node = best.el.parentElement
+      while (node && node !== document.body && node !== document.documentElement) {
+        const nodeText = norm(node.innerText || '').toLowerCase()
+        const nodeLabel = labelOf(node).toLowerCase()
+        if ((nodeText.includes(want) || (nodeLabel && nodeLabel.includes(want))) && node.contains(at)) {
+          hit = true
+          viaAncestor = true
+          break
+        }
+        node = node.parentElement
+      }
+    }
+    if (!hit) cover = at ? { tag: at.tagName, id: at.id || undefined, cls: String(at.className || '').slice(0, 40) } : null
+  } catch {}
+  return {
+    x, y,
+    text: (best.text || best.label || '').slice(0, 80),
+    scrolled,
+    matches: out.length,
+    hit,
+    matchedBy: best.byLabel ? 'label' : (best.byText ? 'text' : 'value'),
+    ...(viaAncestor ? { viaAncestor: true } : {}),
+    ...(cover ? { cover } : {}),
+  }
+}
+
+export const textPointExpr = (wanted) => `(${textPoint.toString()})(${JSON.stringify(String(wanted ?? ''))})`
 
 /**
  * Collect the nodes that DO contain the text when no hittable hit was found.

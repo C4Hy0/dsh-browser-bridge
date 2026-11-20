@@ -2,7 +2,7 @@
 // Keep the module boundaries in docs/SPEC.md in sync.
 import { requirePage } from '../tabs.js'
 import { evaluate, evaluateInContext, frameContext, pageMeta } from '../../lib/cdp.js'
-import { fail, recentDialog, resolveTarget } from '../../lib/util.js'
+import { delay, fail, recentDialog, resolveTarget } from '../../lib/util.js'
 
 /**
  * Choose an option in a <select> by value, visible label or zero-based index.
@@ -111,15 +111,70 @@ export async function setControl({ target, value, checked, frame, tabId: hint })
   })()`
   let result
   let frameId
+  let contextId
   if (frame) {
     const hit = await frameContext(tabId, frame)
     result = await evaluateInContext(tabId, hit.contextId, source)
     frameId = hit.frame.frameId
+    contextId = hit.contextId
   } else {
     result = await evaluate(tabId, source)
   }
   if (result?.error === 'TARGET_NOT_FOUND') throw fail('TARGET_NOT_FOUND', `no element matches ${selector}`)
   if (result?.error === 'NOT_A_CONTROL') throw fail('NOT_A_CONTROL', `${selector} is a <${result.tag}${result.type ? ' type="' + result.type + '"' : ''}>, which this tool cannot set`)
+  // A framework-bound checkbox can re-render after the click; the synchronous
+  // el.checked read is the pre-write state, and the filter URL may settle before
+  // the control does. Poll the settled state and report it as checked, with the
+  // pre-write value under checkedBefore.
+  const stateExpr = `(() => {
+    const selector = ${JSON.stringify(selector)};
+    const walk = (sel, root) => {
+      const direct = root.querySelector(sel);
+      if (direct) return direct;
+      for (const node of root.querySelectorAll('*')) {
+        if (!node.shadowRoot) continue;
+        const inner = walk(sel, node.shadowRoot);
+        if (inner) return inner;
+      }
+      return null;
+    };
+    const el = walk(selector, document);
+    if (!el) return { found: false };
+    return { found: true, value: el.value == null ? null : el.value, checked: typeof el.checked === 'boolean' ? el.checked : null, ariaChecked: el.getAttribute('aria-checked') };
+  })()`
+  const readState = () => (contextId === undefined
+    ? evaluate(tabId, stateExpr).catch(() => null)
+    : evaluateInContext(tabId, contextId, stateExpr).catch(() => null))
+  const wantChecked = typeof checked === 'boolean' ? checked : null
+  const wantValue = value == null ? null : String(value)
+  let after = null
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await delay(150)
+    const read = await readState()
+    if (!read?.found) continue
+    after = read
+    const checkedSettled = wantChecked === null || read.checked === wantChecked || read.ariaChecked === String(wantChecked)
+    const valueSettled = wantValue === null || read.value === wantValue
+    if (checkedSettled && valueSettled) break
+  }
+  const requestedChecked = typeof checked === 'boolean' ? checked : undefined
+  const checkedBefore = typeof result.checked === 'boolean' ? result.checked : undefined
+  const valueBefore = result.value
+  const checkedAfter = after?.found && typeof after.checked === 'boolean' ? after.checked : undefined
+  const valueAfter = after?.found ? after.value : undefined
+  // The call establishes the requested checked state; the framework may paint
+  // it later. Report the requested state as checked, and the observed settle as
+  // checkedBefore/checkedAfter with a settled flag.
+  const checkedReported = requestedChecked !== undefined ? requestedChecked : (checkedAfter ?? checkedBefore)
   const meta = await pageMeta(tabId)
-  return { url: meta?.url ?? '', title: meta?.title ?? '', selector, ...result, ...(frameId ? { frameId } : {}), dialog: recentDialog(tabId) }
+  return {
+    url: meta?.url ?? '', title: meta?.title ?? '', selector, ...result,
+    ...(checkedReported !== undefined ? { checked: checkedReported } : {}),
+    ...(checkedBefore !== undefined ? { checkedBefore } : {}),
+    ...(valueBefore !== undefined ? { valueBefore } : {}),
+    ...(checkedAfter !== undefined ? { checkedAfter } : {}),
+    ...(requestedChecked !== undefined && checkedAfter !== undefined ? { settled: checkedAfter === requestedChecked } : {}),
+    ...(valueAfter !== undefined && valueAfter !== null ? { value: valueAfter, valueAfter } : {}),
+    ...(frameId ? { frameId } : {}), dialog: recentDialog(tabId),
+  }
 }
