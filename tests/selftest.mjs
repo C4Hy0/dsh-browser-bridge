@@ -432,6 +432,8 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/stale/.test(skillSource), 'SKILL.md no longer documents cache clearing on a successful navigation')
     assert.ok(/close the tabs you opened when the work is done/i.test(skillSource), 'SKILL.md no longer tells the agent to close its tabs')
     assert.ok(/never close a tab you did not open/i.test(skillSource), 'SKILL.md no longer protects the user tabs')
+    assert.ok(/Close every tab you opened for the task/.test(skillSource), 'SKILL.md no longer makes tab cleanup a workflow step')
+    assert.ok(/fixture and test tabs/i.test(skillSource), 'SKILL.md no longer calls out fixture and test tabs')
   }
   console.log('ok  eval target echo, typed failures and the docs are pinned')
 

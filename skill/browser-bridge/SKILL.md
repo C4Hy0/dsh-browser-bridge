@@ -66,6 +66,11 @@ http(s) URL and reports `autoNewTab` instead of failing.
    is how a string returned by `bsb_read` but painted by a zero-size,
    `pointer-events:none` or `aria-hidden` node stays clickable: press a candidate
    box with `click x,y` or the nearest clickable ancestor.
+6. **Clean up.** Close every tab you opened for the task, including fixture,
+   scenario, and acceptance-test tabs, with
+   `bsb_tabs {action:"close", tabId:<id>}`. Leave a tab open only when you are
+   presenting it to the user, and name it in the answer. Never close a tab you
+   did not open; the user's tabs are off limits.
 
 ## Navigation truth and page state
 
@@ -362,8 +367,8 @@ tracked tab, so one agent's open never retargets another agent's reads.
   state except inside the guarded `bsb_eval` read paths, and only when the task
   is a benchmark/demo target where that is allowed.
 - Leave the user's tabs and tracked page as they were, and never close a tab you
-  did not open. Close the tabs you opened when the task is done, unless you are
-  leaving one open to present to the user.
+  did not open. Close the tabs you opened when the task is done, including
+  fixture and test tabs, unless you are leaving one open to present to the user.
 
 ## Token discipline
 
