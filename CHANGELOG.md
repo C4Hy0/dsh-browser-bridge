@@ -6,7 +6,7 @@ version is the manifest version.
 
 ## [Unreleased]
 
-## [1.2.10] - 2026-11-19
+## [1.2.10] - 2026-11-20
 
 Plugin 1.2.10, extension 1.1.10.
 
@@ -25,7 +25,7 @@ Plugin 1.2.10, extension 1.1.10.
   `cordis.patch.yml` keeps its indentation and the DSH profile accepts the
   package. The 1.2.9 package was rejected before install with a YAML error.
 - The release workflow checks the generated npm copy before publish: package
-  name, version, row indentation, and client id.
+  name, version, row indentation, client id and card key.
 - The plugin page card registers under the package name, so the Browser
   extension and Connected browsers cards appear after the project rename.
 
