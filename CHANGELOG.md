@@ -39,12 +39,18 @@ version is the manifest version.
   `resolvedSelector` and `box`.
 - Key text on an input or textarea measures the focused element's value, so
   `textVerified` is backed by a real text length change.
-- `bsb_read` rows accepts `attrs` (up to 8 attribute names per row) and
-  `textMaxChars` (40-4000) for the per-row text cap.
+- `bsb_read` rows accepts `attrs` (up to 8 attribute names per row, read from
+  the row or its first descendant that has one) and `textMaxChars` (40-4000) for
+  the per-row text cap.
 - A click on a control whose own bound label covers the point is accepted
   instead of failing `TARGET_COVERED`.
 - A capture on a `forceActive`-held tab renders through the off-screen path, so
   the pixels match the current viewport instead of a stale frame.
+- Commands to the same browser are no longer serialized on the host. The host
+  queues and delivers them, and the extension's per-tab scheduler runs different
+  tabs concurrently while the same tab keeps its order. A command's 30 s timer
+  starts when it is sent, so the typed `BUSY_TIMEOUT` beats the 35 s harness
+  watchdog under swarm load.
 
 ## [1.2.10] - 2026-11-20
 

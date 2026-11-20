@@ -1076,7 +1076,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/shared\.refs\.delete\(/.test(workerSource) && !/shared\.refs = new Map\(\)/.test(workerSource), 'refs are invalidated globally again')
     assert.ok(/renderedSelectorExpr/.test(workerSource) && /matchedCount: resolved\.matchedCount/.test(workerSource), 'type resolves the first zero-size duplicate again')
     assert.ok(/plain \? 'value'/.test(workerSource), 'key text measures document text for an input again')
-    assert.ok(/rec\.attrs/.test(workerSource) && /textMaxChars/.test(toolsSource) && /textMaxChars/.test(workerSource), 'rows lost attrs or the text cap')
+    assert.ok(/rec\.attrs/.test(workerSource) && /el\.querySelectorAll\('\*'\)/.test(workerSource) && /textMaxChars/.test(toolsSource) && /textMaxChars/.test(workerSource), 'rows lost attrs, the descendant read or the text cap')
     assert.ok(/Object\.prototype\.hasOwnProperty\.call\(raw, 'result'\)/.test(toolsSource), 'saveTo writes the tool envelope again')
     assert.ok(/at\.htmlFor === pick\.el\.id/.test(workerSource), 'a bound own label is refused as a cover again')
     assert.ok(/shared\.heldForced\.has\(tabId\)/.test(workerSource), 'a held tab is captured from the stale surface again')
@@ -1201,6 +1201,8 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
   // unload, and it must let dispatched commands settle first.
   assert.ok(/await previous\.drain\(/.test(hostSource), 'the rebind no longer drains in-flight commands')
   assert.ok(/code: 'REBOUND'/.test(hostSource), 'the rebind no longer names its reason')
+  assert.ok(!/#chains/.test(bridgeSource), 'the host serializes commands per browser again')
+  assert.ok(/const result = run\(\)/.test(bridgeSource), 'send no longer starts commands concurrently')
   assert.ok(/async drain\(ms = 1500\)/.test(bridgeSource), 'the transport lost its drain')
   assert.ok(/dispose\(reason = \{\}\)/.test(bridgeSource), 'dispose no longer takes a reason')
   console.log('ok  a port move drains in-flight commands and names the real reason')

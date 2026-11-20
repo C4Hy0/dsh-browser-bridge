@@ -3,8 +3,9 @@
  *
  * Registration is raw (`ctx.tools.register`), so every `parameters` value is a
  * complete JSON Schema with a root `type: 'object'` — a shorthand object would
- * reach strict providers without a root type and be rejected. Browser actions
- * are deliberately not concurrency-safe: each browser has one stateful tab.
+ * reach strict providers without a root type and be rejected. Commands to
+ * different tabs are independent; the extension serializes commands for the
+ * same tab, and browser-level actions stay ordered.
  *
  * @module browser-bridge/tools
  */
@@ -1400,7 +1401,7 @@ export function registerTools(ctx, bridge) {
       offset: { type: 'number', description: 'rows: skip this many (paging).' },
       text: { type: 'boolean', description: 'rows: include visible text (default true). innerText only; a zero-size row yields visible:false and no text, and textTruncated:true marks text cut at textMaxChars.' },
       textMaxChars: { type: 'number', description: 'rows: cap each row\'s text at this many characters, 40-4000 (default 240). textTruncated marks a cut.' },
-      attrs: { type: 'array', items: { type: 'string' }, description: 'rows: attribute names to include on each row (max 8), e.g. ["data-testid","role"]. Values are capped at 240 characters.' },
+      attrs: { type: 'array', items: { type: 'string' }, description: 'rows: attribute names to include on each row (max 8), e.g. ["data-testid","role"]. Reads the row or its first descendant that has the attribute; values are capped at 240 characters.' },
       href: { type: 'boolean', description: 'rows: include a resolved link. A non-anchor row resolves its first http(s) descendant anchor (mailto fallback) and sets hrefSource:"descendant".' },
       resolve: { type: 'boolean', description: 'rows: decode a known redirector href without navigating. Implies href:true. Recognizes google /url?q=|url=, google /goto?url=<base64, standard or URL-safe, padded or not> and l.facebook.com/l.php?u=, and adds resolved, hrefResolved and resolvableBy ("decoded"|"navigation"). t.co and undecodable payloads get resolvableBy:"navigation" instead of a guessed URL. A row without these fields is not a known redirector.' },
       image: { type: 'boolean', description: 'rows: include image source.' },

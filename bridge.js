@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const PROTOCOL = 2
-export const VERSION = '1.2.15'
+export const VERSION = '1.2.16'
 
 /** Messages this class throws carry a stable code the tools pass through. */
 /**
@@ -135,7 +135,6 @@ export class Bridge {
   #server
   #pending = new Map()
   #browsers = new Map()
-  #chains = new Map()
   #blocked = new Set()
   #seq = 0
   #disposed = false
@@ -279,8 +278,10 @@ export class Bridge {
   /**
    * Send one command to one browser.
    *
-   * Serialized per browser: each is a single stateful tab, so two calls must not
-   * interleave there, while two different browsers may work in parallel.
+   * Commands are queued per browser and delivered one per poll. The extension
+   * schedules them per tab: different tabs run concurrently, the same tab keeps
+   * its order. Serializing here would make every call to one browser wait for
+   * the previous call's result, regardless of tab, which is the swarm throttle.
    */
   send(method, params = {}, { browser, timeoutMs = 30000 } = {}) {
     const run = async () => {
@@ -333,7 +334,7 @@ export class Bridge {
       const result = new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           this.#pending.delete(commandId)
-          reject(new BridgeError('BUSY_TIMEOUT', `the browser did not answer "${method}" within ${Math.round(timeoutMs / 1000)}s; the bridge serializes commands, so it may have executed. Read the page before retrying.`))
+          reject(new BridgeError('BUSY_TIMEOUT', `the browser did not answer "${method}" within ${Math.round(timeoutMs / 1000)}s; it may still run. Read the page before retrying.`))
         }, timeoutMs)
         this.#pending.set(commandId, { resolve, reject, timer, method, browser: id })
       })
@@ -344,16 +345,17 @@ export class Bridge {
       this.#deliver(entry)
       return result
     }
-    const key = browser ?? 'auto'
-    const chain = (this.#chains.get(key) ?? Promise.resolve()).then(run, run)
+    // Start immediately. The per-browser queue and the extension's per-tab
+    // scheduler preserve ordering where it matters; a host-side chain would make
+    // every command wait for the previous command's result, whatever its tab.
+    const result = run()
     // A caller that stops waiting (a cancelled tool call, a fire-and-forget
     // path) must not turn a browser timeout into an unhandled rejection. Node
     // exits the whole process on those, so a slow browser could take the host
     // down. Mark the promise handled here; callers that await it still get the
     // rejection.
-    chain.catch(() => {})
-    this.#chains.set(key, chain.then(() => {}, () => {}))
-    return chain
+    result.catch(() => {})
+    return result
   }
 
   async #waitLive(id, waitMs) {

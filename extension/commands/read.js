@@ -303,8 +303,17 @@ export async function inspectPage({ selector, offset, limit, text: withText, hre
       if (rowAttrs.length) {
         const map = {}
         for (const name of rowAttrs) {
-          const value = el.getAttribute(name)
-          if (value !== null) map[name] = value.length > 240 ? value.slice(0, 240) : value
+          let found = el.getAttribute(name)
+          // A row wrapper often carries the data on a child (HN's indent lives
+          // on td.ind inside tr.athing.comtr). Read the row and its first
+          // descendant that has the attribute, so one call covers the row.
+          if (found === null) {
+            for (const node of el.querySelectorAll('*')) {
+              found = node.getAttribute(name)
+              if (found !== null) break
+            }
+          }
+          if (found !== null) map[name] = found.length > 240 ? found.slice(0, 240) : found
         }
         if (Object.keys(map).length) rec.attrs = map
       }
