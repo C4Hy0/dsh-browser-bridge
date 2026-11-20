@@ -99,7 +99,7 @@ export const fingerprintChanged = (before, after) => {
  * character keep the effect identical for the page but indistinguishable from a
  * person typing.
  */
-export async function clearAndType(tabId, text) {
+export async function clearAndType(tabId, text, { bulk = false } = {}) {
   const stroke = async (key, code, vk, modifiers = 0) => {
     const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers }
     await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...base })
@@ -107,11 +107,20 @@ export async function clearAndType(tabId, text) {
   }
   await stroke('a', 'KeyA', 65, 2)
   await stroke('Backspace', 'Backspace', 8)
-  for (const ch of Array.from(String(text ?? ''))) {
+  const chars = Array.from(String(text ?? ''))
+  // A long editable write through per-character key events is a queue filler:
+  // two CDP round trips plus 12 ms per character. Insert the block as one real
+  // input event instead; the reply says which path ran.
+  if (bulk && chars.length > 200) {
+    await send(tabId, 'Input.insertText', { text: chars.join('') })
+    return 'insertText'
+  }
+  for (const ch of chars) {
     await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch, unmodifiedText: ch })
     await send(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: ch })
     await delay(12)
   }
+  return 'keys'
 }
 
 /**

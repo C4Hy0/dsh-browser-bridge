@@ -20,10 +20,16 @@ version is the manifest version.
   `checkedBefore`/`checkedAfter` when the control is a checkbox.
 - `bsb_open` exposes `tabId` in its schema and documents that it navigates that
   tab in place and ignores `newTab`.
+- Commands for different tabs run concurrently. Per-tab order is preserved and
+  global tab/recorder commands stay serialized, so a slow wait or capture on one
+  tab no longer queues every other tab's work.
+- Long editable text in `type` is inserted with one `Input.insertText` above 200
+  characters instead of two CDP key events per character; the reply reports
+  `mode: "insertText"`.
 - The wheel `deltaY` description matches the behaviour: positive scrolls down,
   negative scrolls up.
-- The tool timeout is 35 s, below the harness watchdog, so a slow call returns
-  the typed `BUSY_TIMEOUT` instead of a bare tool timeout.
+- The tool timeout is 30 s, below the harness's 35 s watchdog, so a slow call
+  returns the typed `BUSY_TIMEOUT` instead of a bare tool timeout.
 
 ## [1.2.10] - 2026-11-20
 

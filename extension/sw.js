@@ -52,6 +52,48 @@ async function resumeLoopback() {
   }
 }
 
+// Commands for different tabs run concurrently; commands for the same tab keep
+// their order. Global tab/recorder operations stay on one serial chain. This is
+// what lets fifteen agents with fifteen tabs work at once instead of queueing
+// every call behind one slow wait or capture.
+const commandChains = new Map()
+const GLOBAL_COMMANDS = new Set(['open', 'openUrl', 'close', 'tabs', 'closeTab', 'openExtensionPage', 'record', 'sheet'])
+
+function queueKey(command) {
+  const method = command.method
+  const tabId = Number(command.params?.tabId)
+  if (method === 'open' && Number.isFinite(tabId)) return 'tab:' + tabId
+  if (GLOBAL_COMMANDS.has(method)) return 'global'
+  return Number.isFinite(tabId) ? 'tab:' + tabId : 'global'
+}
+
+async function executeCommand(command, endpoint, browserId) {
+  let settled
+  try {
+    settled = await Promise.race([
+      runCommand(command),
+      delay(45000).then(() => ({ ok: false, error: { code: 'BUSY_TIMEOUT', message: 'the command timed out; it may have executed, read the page before retrying' } })),
+    ])
+  } catch (error) {
+    settled = { ok: false, error: { code: 'COMMAND_FAILED', message: String(error?.message ?? error) } }
+  }
+  const browser = browserId ?? (await whoami()).id
+  await postResult(endpoint, command.id, { ...settled, browser })
+}
+
+function scheduleCommand(command, endpoint, browserId) {
+  const key = queueKey(command)
+  const previous = commandChains.get(key) ?? Promise.resolve()
+  const task = previous.then(
+    () => executeCommand(command, endpoint, browserId),
+    () => executeCommand(command, endpoint, browserId),
+  )
+  commandChains.set(key, task)
+  void task.finally(() => {
+    if (commandChains.get(key) === task) commandChains.delete(key)
+  })
+}
+
 async function startLoop() {
   if (shared.looping) return
   shared.looping = true
@@ -74,7 +116,7 @@ async function startLoop() {
         try {
           const served = await fetch(endpoint + '/version', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null))
           const running = chrome.runtime.getManifest().version
-          if (served?.version && served.version !== running) {
+          if (served?.version && served.version !== running && commandChains.size === 0) {
             // Chrome throttles runtime.reload(): once per version, and never more
             // often than every few minutes, or it flags the extension.
             const { selfUpdate = {} } = await chrome.storage.local.get('selfUpdate')
@@ -110,12 +152,9 @@ async function startLoop() {
         const command = await response.json()
         shared.backoff = 0
         failures = 0
-        // Never let one wedged command (a stuck screenshot) starve the loop.
-        const settled = await Promise.race([
-          runCommand(command),
-          delay(45000).then(() => ({ ok: false, error: { code: 'BUSY_TIMEOUT', message: 'the command timed out; it may have executed, read the page before retrying' } })),
-        ])
-        await postResult(endpoint, command.id, { ...settled, browser: (await whoami()).id })
+        // Do not block the poll loop on this command: schedule it on its tab's
+        // chain and keep polling, so other tabs' commands are delivered now.
+        scheduleCommand(command, endpoint, me.id)
       } catch {
         failures += 1
         // A saved URL from an older pairing (wrong host or rotated token) never

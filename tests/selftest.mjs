@@ -1070,6 +1070,17 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.equal(cardKey, packageName, 'client.js registers the plugin page card under a different key than the package name')
   }
 
+  // Bridge throughput: per-tab scheduling and a bulk editable type path.
+  {
+    assert.ok(/const commandChains = new Map\(\)/.test(workerSource), 'commands are serialized globally again')
+    assert.ok(/function queueKey\(command\)/.test(workerSource) && /GLOBAL_COMMANDS/.test(workerSource), 'the per-tab scheduler lost its keying')
+    assert.ok(/scheduleCommand\(command, endpoint, me\.id\)/.test(workerSource), 'the poll loop awaits a command again')
+    assert.ok(/bulk && chars\.length > 200/.test(workerSource) && /return 'insertText'/.test(workerSource), 'long editable text is back on the per-character path')
+    assert.ok(/mode, activeElement/.test(workerSource) || /mode:\s/.test(workerSource), 'the type reply no longer reports its mode')
+    assert.ok(/const TIMEOUT_MS = 30000/.test(toolsSource), 'the tool budget no longer clears the harness watchdog')
+    console.log('ok  per-tab scheduling and the bulk type path are pinned')
+  }
+
   // Ticket batch 2026-11-20: text and selector targeting, post-action state.
   {
     assert.ok(/export function textPoint\(wantedRaw\)/.test(workerSource), 'text targeting lost the normalizing helper')
@@ -1080,7 +1091,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/checkedAfter/.test(workerSource), 'set still reports the pre-write state')
     assert.ok(/tabId: \{ type: 'number', description: 'Navigate this tab/.test(toolsSource), 'bsb_open tabId is missing from the schema')
     assert.ok(/positive scrolls down/.test(toolsSource), 'the wheel sign description is wrong')
-    assert.ok(/const TIMEOUT_MS = 35000/.test(toolsSource), 'the tool timeout still races the harness watchdog')
+    assert.ok(/const TIMEOUT_MS = 30000/.test(toolsSource), 'the tool timeout still races the harness watchdog')
     console.log('ok  text and selector targeting, post-action state and tool contracts are pinned')
   }
 
@@ -1489,7 +1500,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.ok(/BSB-20261119-0120/.test(workerSource) && /DIALOG_STATE_UNKNOWN/.test(workerSource), 'pixels sweep or the lapsed dialog guard regressed')
     assert.ok(/Page\.frameNavigated/.test(workerSource) && /shared\.uploads\.set/.test(workerSource), 'navigation does not clear the dialog, or uploads cannot restore')
     assert.ok(/previous selection was restored/.test(workerSource), 'a failed upload no longer restores the last good paths')
-    assert.ok(/BUSY_TIMEOUT/.test(workerSource) && /const TIMEOUT_MS = 35000/.test(toolsSource), 'timeouts no longer carry BUSY_TIMEOUT below the harness watchdog')
+    assert.ok(/BUSY_TIMEOUT/.test(workerSource) && /const TIMEOUT_MS = 30000/.test(toolsSource), 'timeouts no longer carry BUSY_TIMEOUT below the harness watchdog')
     console.log('ok  saveTo resolves and the wheel polls for movement')
   }
 

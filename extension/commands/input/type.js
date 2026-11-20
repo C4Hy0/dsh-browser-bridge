@@ -19,7 +19,7 @@ export async function typePage({ target, text, submit, frame, forceActive: force
     const selector = resolveTarget(target, tabId)
     const where = `frame ${hit.url || hit.frameId}`
     await requireEditableTarget(tabId, selector, contextId, where)
-    await clearAndType(tabId, text)
+    const mode = await clearAndType(tabId, text, { bulk: true })
     const frameTyped = await ensureTyped(tabId, selector, text, contextId)
     if (wanted.length && (typeof frameTyped.value !== 'string' || !frameTyped.value.includes(wanted))) {
       throw fail('TYPE_NOT_APPLIED', typedValueDidNotLand(selector, wanted, frameTyped.value))
@@ -36,13 +36,13 @@ export async function typePage({ target, text, submit, frame, forceActive: force
     return finish({
       url: frameMeta?.url ?? '', title: frameMeta?.title ?? '', frameId: hit.frameId,
       typed: frameTyped.value ?? undefined, valueAfter: frameTyped.value ?? undefined, valueForced: frameTyped.forced,
-      activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
+      mode, activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
     })
   }
   const selector = resolveTarget(target, tabId)
   await requireEditableTarget(tabId, selector)
   // Insert as real input so every keystroke goes through the page's handlers.
-  await clearAndType(tabId, text)
+  const mode = await clearAndType(tabId, text, { bulk: true })
   const landed = await ensureTyped(tabId, selector, text)
   if (wanted.length && (typeof landed.value !== 'string' || !landed.value.includes(wanted))) {
     throw fail('TYPE_NOT_APPLIED', typedValueDidNotLand(selector, wanted, landed.value))
@@ -59,6 +59,6 @@ export async function typePage({ target, text, submit, frame, forceActive: force
   return finish({
     url: meta?.url ?? '', title: meta?.title ?? '',
     typed: landed.value ?? undefined, valueAfter: landed.value ?? undefined, valueForced: landed.forced,
-    activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
+    mode, activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
   })
 }
