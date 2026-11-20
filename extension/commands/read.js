@@ -240,12 +240,16 @@ export async function evalPage({ expression, awaitPromise, frame, world, tabId: 
   return { ...extra, result: value }
 }
 
-export async function inspectPage({ selector, offset, limit, text: withText, href: withHref, image: withImage, state: withState, resolve: withResolve, tabId: hint }) {
+export async function inspectPage({ selector, offset, limit, text: withText, href: withHref, image: withImage, state: withState, resolve: withResolve, attrs, textMaxChars, tabId: hint }) {
   const tabId = await requirePage(hint)
   const sel = typeof selector === 'string' ? selector.trim() : ''
   if (!sel) throw fail('NO_SELECTOR', 'pass a CSS selector such as "a", "table tr" or "div.card"')
   const cap = Math.min(Math.max(Number(limit) || 50, 1), 500)
   const skip = Math.min(Math.max(Number(offset) || 0, 0), 1000)
+  const textCap = Math.min(Math.max(Math.trunc(Number(textMaxChars)) || 240, 40), 4000)
+  const attrNames = Array.isArray(attrs)
+    ? attrs.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim()).slice(0, 8)
+    : []
   const want = {
     text: withText !== false,
     // resolve is about a link, so asking for it implies the href field.
@@ -274,7 +278,7 @@ export async function inspectPage({ selector, offset, limit, text: withText, hre
         // innerText is the visible text. textContent would emit inline <script>
         // and <style> source from wrappers whose innerText is empty.
         const t = (typeof el.innerText === 'string' ? el.innerText : '').replace(/\\s+/g, ' ').trim()
-        if (t) { rec.text = t.slice(0, 240); if (t.length > 240) rec.textTruncated = true }
+        if (t) { rec.text = t.slice(0, ${textCap}); if (t.length > ${textCap}) rec.textTruncated = true }
       }
       if (${want.href}) {
         if (el.matches('a[href]')) {
@@ -295,6 +299,15 @@ export async function inspectPage({ selector, offset, limit, text: withText, hre
       }
       ${resolveExpr}
       if (${want.image}) { const im = el.matches('img') ? el : el.querySelector('img'); if (im) rec.image = im.currentSrc || im.src || im.getAttribute('src') || '' }
+      const rowAttrs = ${JSON.stringify(attrNames)}
+      if (rowAttrs.length) {
+        const map = {}
+        for (const name of rowAttrs) {
+          const value = el.getAttribute(name)
+          if (value !== null) map[name] = value.length > 240 ? value.slice(0, 240) : value
+        }
+        if (Object.keys(map).length) rec.attrs = map
+      }
       if (${want.state}) {
         const control = el.matches('input,select,textarea,option') ? el : el.querySelector('input,select,textarea')
         if (control) {

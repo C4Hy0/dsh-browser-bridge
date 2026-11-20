@@ -261,6 +261,14 @@
   }, 100)
 </script>
 <section>
+  <h2>own label cover</h2>
+  <div style="position:relative;width:120px;height:24px;">
+    <input id="own-radio" type="radio" name="own" style="position:absolute;left:0;top:0;width:120px;height:24px;margin:0;">
+    <label for="own-radio" style="position:absolute;left:0;top:0;width:120px;height:24px;display:block;background:#eef;text-align:center;">own label</label>
+  </div>
+  <p>own radio checked: <code id="own-state">no</code></p>
+</section>
+<section>
   <p>tall element — taller than the viewport on purpose, so a selector capture must not truncate it</p>
   <div id="tall" style="width:120px;height:1200px;background:linear-gradient(#cfe8ff,#0a4d8c);"></div>
 </section>

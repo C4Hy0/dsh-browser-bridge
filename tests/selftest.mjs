@@ -1070,6 +1070,19 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
     assert.equal(cardKey, packageName, 'client.js registers the plugin page card under a different key than the package name')
   }
 
+  // Ticket batch 2026-11-20 round 2: refs, eval value, type duplicates, key
+  // text truth, rows options, own label, held capture.
+  {
+    assert.ok(/shared\.refs\.delete\(/.test(workerSource) && !/shared\.refs = new Map\(\)/.test(workerSource), 'refs are invalidated globally again')
+    assert.ok(/renderedSelectorExpr/.test(workerSource) && /matchedCount: resolved\.matchedCount/.test(workerSource), 'type resolves the first zero-size duplicate again')
+    assert.ok(/plain \? 'value'/.test(workerSource), 'key text measures document text for an input again')
+    assert.ok(/rec\.attrs/.test(workerSource) && /textMaxChars/.test(toolsSource) && /textMaxChars/.test(workerSource), 'rows lost attrs or the text cap')
+    assert.ok(/Object\.prototype\.hasOwnProperty\.call\(raw, 'result'\)/.test(toolsSource), 'saveTo writes the tool envelope again')
+    assert.ok(/at\.htmlFor === pick\.el\.id/.test(workerSource), 'a bound own label is refused as a cover again')
+    assert.ok(/shared\.heldForced\.has\(tabId\)/.test(workerSource), 'a held tab is captured from the stale surface again')
+    console.log('ok  refs, type duplicates, key text, rows, saveTo, own label and held capture are pinned')
+  }
+
   // Bridge throughput: per-tab scheduling and a bulk editable type path.
   {
     assert.ok(/const commandChains = new Map\(\)/.test(workerSource), 'commands are serialized globally again')
@@ -1598,7 +1611,7 @@ console.log('ok  page-driving failure guards are pinned (attach, image maps, typ
       'key text verification lost the canvas-editor document mirror',
     )
     assert.ok(
-      /source: mirror === null \? 'editor' : 'document-mirror'/.test(workerSource),
+      /source: mirror !== null \? 'document-mirror' : \(plain \? 'value' : 'editor'\)/.test(workerSource),
       'key text verification no longer names the measured source',
     )
     assert.ok(

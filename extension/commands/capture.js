@@ -843,7 +843,11 @@ export async function screenshotPage({ fullPage, selector, rect, scale, frame, t
     throw fail('TAB_NOT_VISIBLE', 'capture needs a laid-out viewport, but the page reports a 0x0 layout (the window is minimized or not laid out). Restore the window and retry. A hidden tab with a normal layout viewport is captured off-screen without activation.')
   }
   const visibility = await pageVisibility(tabId)
-  const hidden = visibility === 'hidden'
+  // A forceActive hold makes the page report visible, but the compositor may
+  // have no current surface, so the regular shot is a stale frame. Render a
+  // held tab through the off-screen path, the same one a hidden tab uses.
+  const held = shared.heldForced.has(tabId)
+  const hidden = visibility === 'hidden' || held
   const prep = await prepareShot({ fullPage, selector, rect, scale, frame, tabId })
   // A capture never activates a tab or raises a window. A hidden page is shot
   // through captureBeyondViewport instead, which renders it without a compositor
@@ -857,7 +861,7 @@ export async function screenshotPage({ fullPage, selector, rect, scale, frame, t
     const png = await preprocessPng(raw, preprocess)
     const size = pngSize(png)
     const scale = prep.target && prep.target.width > 0 ? size.width / prep.target.width : undefined
-    return { url: meta?.url ?? '', title: meta?.title ?? '', width: size.width, height: size.height, scale, pngBase64: png, frameId: prep.frameId, preprocessed: png !== raw || undefined, hidden, visibility }
+    return { url: meta?.url ?? '', title: meta?.title ?? '', width: size.width, height: size.height, scale, pngBase64: png, frameId: prep.frameId, preprocessed: png !== raw || undefined, hidden, visibility, ...(held ? { held: true } : {}) }
   }
   const gap = Math.min(Math.max(Math.trunc(Number(intervalMs)) || 150, 0), 2000)
   const shots = []
@@ -883,6 +887,7 @@ export async function screenshotPage({ fullPage, selector, rect, scale, frame, t
     frameHeight: first.height,
     hidden,
     visibility,
+    ...(held ? { held: true } : {}),
   }
   } finally {
     if (origin) {

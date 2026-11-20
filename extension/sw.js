@@ -373,6 +373,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     // A reload or navigation is a new document; the old dialog record must not
     // refuse Enter on the new page forever (BSB-20261119-0135).
     shared.dialogs.delete(source.tabId)
+    shared.refs.delete(source.tabId)
     for (const key of [...shared.uploads.keys()]) {
       if (key.startsWith(source.tabId + ':')) shared.uploads.delete(key)
     }

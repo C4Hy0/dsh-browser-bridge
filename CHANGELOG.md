@@ -30,6 +30,21 @@ version is the manifest version.
   negative scrolls up.
 - The tool timeout is 30 s, below the harness's 35 s watchdog, so a slow call
   returns the typed `BUSY_TIMEOUT` instead of a bare tool timeout.
+- `@eN` refs stay valid across `bsb_open newTab` and reads in other tabs; closing
+  a tab or navigating it drops only that tab's refs.
+- `bsb_eval saveTo` writes the expression's value (raw for a string, JSON
+  otherwise), not the tool reply envelope.
+- `type` resolves a selector the way click does: zero-size duplicates are
+  dropped, the rendered match is used, and the reply carries `matchedCount`,
+  `resolvedSelector` and `box`.
+- Key text on an input or textarea measures the focused element's value, so
+  `textVerified` is backed by a real text length change.
+- `bsb_read` rows accepts `attrs` (up to 8 attribute names per row) and
+  `textMaxChars` (40-4000) for the per-row text cap.
+- A click on a control whose own bound label covers the point is accepted
+  instead of failing `TARGET_COVERED`.
+- A capture on a `forceActive`-held tab renders through the off-screen path, so
+  the pixels match the current viewport instead of a stale frame.
 
 ## [1.2.10] - 2026-11-20
 

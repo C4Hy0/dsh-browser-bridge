@@ -248,7 +248,8 @@ export function boxOf(selector) {
   let hit = null
   try {
     const at = document.elementFromPoint(x, y)
-    hit = Boolean(at) && (at === pick.el || pick.el.contains(at))
+    const boundLabel = Boolean(at) && pick.el.id && at.tagName === 'LABEL' && at.htmlFor === pick.el.id
+    hit = Boolean(at) && (at === pick.el || pick.el.contains(at) || boundLabel)
     if (!hit && at) hit = { tag: at.tagName, id: at.id || undefined, cls: String(at.className || '').slice(0, 40) }
   } catch {}
   const moved = px !== Math.round(window.scrollX) || py !== Math.round(window.scrollY)
@@ -678,6 +679,39 @@ export const CAR_MEASURE_EXPR = `(() => {
  * keystrokes through), so the check never runs where there is no visible editor
  * text to compare.
  */
+// Resolve a selector the way click/scroll do: collect every match, drop
+// zero-size duplicates, and return a unique CSS path for the rendered one. A
+// site with a visible input and a hidden same-id copy must not send typing into
+// the hidden copy.
+export const renderedSelectorExpr = (selector) => `(() => {
+  const all = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
+  const rendered = all.filter((el) => { const r = el.getBoundingClientRect(); return r.width >= 2 && r.height >= 2 })
+  if (!rendered.length) return { matchedCount: all.length, rendered: 0 }
+  const pathOf = (el) => {
+    const parts = []
+    let node = el
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      let part = node.tagName.toLowerCase()
+      const parent = node.parentElement
+      if (parent) {
+        const same = Array.from(parent.children).filter((child) => child.tagName === node.tagName)
+        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')'
+      }
+      parts.unshift(part)
+      node = parent
+    }
+    return 'html > ' + parts.join(' > ')
+  }
+  const first = rendered[0]
+  const r = first.getBoundingClientRect()
+  return {
+    matchedCount: all.length,
+    rendered: rendered.length,
+    selector: pathOf(first),
+    box: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+  }
+})()`
+
 export const keyTextProbeExpr = (prefix) => `(() => {
   let el = document.activeElement;
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
@@ -715,10 +749,14 @@ export const keyTextProbeExpr = (prefix) => `(() => {
     }
     if (mirrorText.length > 0) mirror = mirrorText;
   }
-  const measured = mirror === null ? text : mirror;
+  // A plain input/textarea owns its text in value, not in document text. A
+  // document-text length is vacuous there (the input's characters are not in
+  // innerText), so measure the value and say so.
+  const plain = tag === 'textarea' || textInput;
+  const measured = mirror !== null ? mirror : (plain || (el && el.isContentEditable === true) ? own : text);
   return {
     applies: editorApplies || mirror !== null,
-    source: mirror === null ? 'editor' : 'document-mirror',
+    source: mirror !== null ? 'document-mirror' : (plain ? 'value' : 'editor'),
     tag,
     url: location.href,
     textLen: measured.length,

@@ -595,7 +595,8 @@ export function registerTools(ctx, bridge) {
       // name a file it could not open.
       const target = explicit ? resolve(explicit) : '/tmp/bsb-eval-' + Date.now().toString(36) + '.json'
       await mkdir(dirname(target), { recursive: true }).catch(() => undefined)
-      const body = raw && typeof raw.result === 'string' ? raw.result : inline
+      const value = raw && Object.prototype.hasOwnProperty.call(raw, 'result') ? raw.result : raw
+      const body = typeof value === 'string' ? value : (value === undefined ? 'undefined' : JSON.stringify(value))
       await writeFile(target, body)
       // Only defined keys: an `undefined` property is dropped by JSON.stringify,
       // so the value no longer round-trips and the host rejects the whole reply
@@ -1397,7 +1398,9 @@ export function registerTools(ctx, bridge) {
       selector: { type: 'string', description: 'rows/feed: elements to read. When nothing matches and the page has a canvas, the rows reply adds canvas:true and a hint. html: element to dump.' },
       limit: { type: 'number', description: 'rows: max rows (default 50).' },
       offset: { type: 'number', description: 'rows: skip this many (paging).' },
-      text: { type: 'boolean', description: 'rows: include visible text (default true). innerText only; a zero-size row yields visible:false and no text, and textTruncated:true marks text cut at 240 characters.' },
+      text: { type: 'boolean', description: 'rows: include visible text (default true). innerText only; a zero-size row yields visible:false and no text, and textTruncated:true marks text cut at textMaxChars.' },
+      textMaxChars: { type: 'number', description: 'rows: cap each row\'s text at this many characters, 40-4000 (default 240). textTruncated marks a cut.' },
+      attrs: { type: 'array', items: { type: 'string' }, description: 'rows: attribute names to include on each row (max 8), e.g. ["data-testid","role"]. Values are capped at 240 characters.' },
       href: { type: 'boolean', description: 'rows: include a resolved link. A non-anchor row resolves its first http(s) descendant anchor (mailto fallback) and sets hrefSource:"descendant".' },
       resolve: { type: 'boolean', description: 'rows: decode a known redirector href without navigating. Implies href:true. Recognizes google /url?q=|url=, google /goto?url=<base64, standard or URL-safe, padded or not> and l.facebook.com/l.php?u=, and adds resolved, hrefResolved and resolvableBy ("decoded"|"navigation"). t.co and undecodable payloads get resolvableBy:"navigation" instead of a guessed URL. A row without these fields is not a known redirector.' },
       image: { type: 'boolean', description: 'rows: include image source.' },
@@ -1430,6 +1433,8 @@ export function registerTools(ctx, bridge) {
           limit: args?.limit,
           offset: args?.offset,
           text: args?.text,
+          textMaxChars: args?.textMaxChars,
+          attrs: Array.isArray(args?.attrs) ? args.attrs : undefined,
           href: args?.href,
           resolve: args?.resolve === true,
           image: args?.image,

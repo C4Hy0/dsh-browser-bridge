@@ -2,7 +2,8 @@
 // Keep the module boundaries in docs/SPEC.md in sync.
 import { clearAndType, ensureTyped, readActiveElement, requireEditableTarget, requireInputVisibility, typedValueDidNotLand } from './shared.js'
 import { requirePage } from '../tabs.js'
-import { clearForced, ensureLayout, frameContext, pageMeta, send } from '../../lib/cdp.js'
+import { clearForced, ensureLayout, evaluate, evaluateInContext, frameContext, pageMeta, send } from '../../lib/cdp.js'
+import { renderedSelectorExpr } from '../../lib/page.js'
 import { delay, fail, inputSuccess, resolveTarget } from '../../lib/util.js'
 
 export async function typePage({ target, text, submit, frame, forceActive: forceWanted, tabId: hint }) {
@@ -16,7 +17,12 @@ export async function typePage({ target, text, submit, frame, forceActive: force
   }
   if (frame) {
     const { frame: hit, contextId } = await frameContext(tabId, frame)
-    const selector = resolveTarget(target, tabId)
+    const requestedSelector = resolveTarget(target, tabId)
+    const resolved = await evaluateInContext(tabId, contextId, renderedSelectorExpr(requestedSelector)).catch(() => null)
+    if (!resolved || resolved.rendered === 0) {
+      throw fail('NOT_VISIBLE', `${requestedSelector} matches ${resolved?.matchedCount ?? 0} node(s) but none has a rendered box; nothing to type into`)
+    }
+    const selector = resolved.selector
     const where = `frame ${hit.url || hit.frameId}`
     await requireEditableTarget(tabId, selector, contextId, where)
     const mode = await clearAndType(tabId, text, { bulk: true })
@@ -35,11 +41,17 @@ export async function typePage({ target, text, submit, frame, forceActive: force
     const activeElementAfter = submit === true ? await readActiveElement(tabId, contextId) : undefined
     return finish({
       url: frameMeta?.url ?? '', title: frameMeta?.title ?? '', frameId: hit.frameId,
+      selector: requestedSelector, matchedCount: resolved.matchedCount, resolvedSelector: selector, box: resolved.box,
       typed: frameTyped.value ?? undefined, valueAfter: frameTyped.value ?? undefined, valueForced: frameTyped.forced,
       mode, activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
     })
   }
-  const selector = resolveTarget(target, tabId)
+  const requestedSelector = resolveTarget(target, tabId)
+  const resolved = await evaluate(tabId, renderedSelectorExpr(requestedSelector)).catch(() => null)
+  if (!resolved || resolved.rendered === 0) {
+    throw fail('NOT_VISIBLE', `${requestedSelector} matches ${resolved?.matchedCount ?? 0} node(s) but none has a rendered box; nothing to type into`)
+  }
+  const selector = resolved.selector
   await requireEditableTarget(tabId, selector)
   // Insert as real input so every keystroke goes through the page's handlers.
   const mode = await clearAndType(tabId, text, { bulk: true })
@@ -58,6 +70,7 @@ export async function typePage({ target, text, submit, frame, forceActive: force
   const activeElementAfter = submit === true ? await readActiveElement(tabId) : undefined
   return finish({
     url: meta?.url ?? '', title: meta?.title ?? '',
+    selector: requestedSelector, matchedCount: resolved.matchedCount, resolvedSelector: selector, box: resolved.box,
     typed: landed.value ?? undefined, valueAfter: landed.value ?? undefined, valueForced: landed.forced,
     mode, activeElement: activeElement ?? undefined, ...(submit === true ? { activeElementAfter: activeElementAfter ?? undefined } : {}),
   })

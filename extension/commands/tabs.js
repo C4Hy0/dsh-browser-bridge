@@ -109,7 +109,6 @@ export async function openPage({ url, newTab, activate, tabId: hint, owner }) {
   // Only a tab this call created gets an owner. A reused tracked tab is shared
   // by design, and an explicit tabId keeps the owner it already has.
   if (created && typeof owner === 'string' && owner) shared.tabOwners.set(tab.id, owner)
-  shared.refs = new Map()
   const recovered = await attachTab(tab.id, { recover: true })
   await send(tab.id, 'Page.enable')
   // PAGE-NEUTRAL: the tab keeps the lifecycle and focus state the browser gives
@@ -212,6 +211,7 @@ export async function closeTab({ tabId }) {
   if (!Number.isInteger(id)) throw fail('BAD_ARGUMENT', 'tabId must be a number')
   const tracked = await getTrackedId()
   await chrome.tabs.remove(id)
+  shared.refs.delete(id)
   if (tracked !== id) return { tabId: id, closed: true, tracked: false }
   // Closing the tracked tab used to leave no page tracked, so the documented
   // housekeeping action broke every later call. Fall back to a scriptable tab.
@@ -371,7 +371,6 @@ export async function useExistingTab({ tabId, activate }) {
     throw error
   }
   await trackId(tab.id)
-  shared.refs = new Map()
   let view = await readVisibility(tab.id)
   // activate defaults to true. Report what the page saw, not only what was
   // asked: a minimized window keeps document.visibilityState hidden even after
@@ -431,6 +430,6 @@ export async function closePage() {
   await detach(tab.id)
   try { await chrome.tabs.remove(tab.id) } catch {}
   await chrome.storage.local.remove('tabId')
-  shared.refs = new Map()
+  shared.refs.delete(tab.id)
   return { closed: true }
 }
